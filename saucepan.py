@@ -6,7 +6,7 @@
 import httplib
 
 __author__ = 'KeiDii'
-__version__ = '0.1'
+__version__ = '0.2'
 __license__ = 'MIT'
 
 
@@ -26,7 +26,7 @@ def get_default_http_message(code):
   c = int(code)/100
   return HTTP_CODE_RANGES.get(c,None)
 
-def http_statu(code, message=None):
+def http_status(code, message=None):
   code = int(code)
   if message is None:
     message = HTTP_CODES.get(code,None)
@@ -92,11 +92,17 @@ class AbstractRouter(object):
   def __init__(self):
     pass
 
-  def add_route(self, *a, **kw):
+  def _pre_process(self, kw):
+    return kw
+
+  def add_entry(self, handler, *a, **kw):
+    kw['args'] = a
+    kw['handler'] = handler
+    self._routes.append(self._pre_process(**kw))
     pass
 
   def test_route(self, env, route):
-    return Fase
+    return True
 
   def use_route(self, route):
     return None
@@ -107,10 +113,48 @@ class AbstractRouter(object):
         return self.use_route(route)
     return None
 
-class DefaultRouter(object):
 
-  def add_route(self, path=None, **kw):
-    pass
+ROUTE_CHECK_UNDEF = -1
+ROUTE_CHECK_STRSTR = 1
+ROUTE_CHECK_SIMPLE = 2
+ROUTE_CHECK_REGEX = 3
+ROUTE_CHECK_CALL = 4
+ROUTE_GENERATOR = 5
+
+
+def method(m):
+  return [m]
+
+METHOD_GET = ['GET']
+METHOD_POST = ['POST']
+
+
+class DefaultRouter(AbstractRouter):
+
+  def _pre_process(self, handler=None, route_type=None, **other):
+
+    if route_type is None:
+      print "route type autodetect ..."
+      if callable(handler):
+        route_type = ROUTE_CHECK_CALL
+      else:
+        print type()
+
+
+    print "Route type " , route_type
+
+    return dict(handler=handler, route_type=route_type).update(other)
+
+  def test_route(self, env, route):
+    print route
+    return False
+
+
+
+
+
+
+
 
 class HttpMessage(object):
   _headers = []
@@ -124,80 +168,80 @@ class HttpResponse(HttpMessage):
   pass
 
 
-class Cruet(object):
+
+class CookingPot(object):
 
   _write_using_writer = False
-  _router = DefaultRouter()
+  router = DefaultRouter()
 
-  def __init__(self):
+  def __init__(self, router_class=None):
+    if router_class:
+      router = router_class()
     pass
 
   def route(self, *a, **kw):
-    def wrapper(f):
-      print "Wrapped :", f
+    def _wrapper(f):
+      print "Route wrapped :", f
+      self.add_route(f, a, kw)
+    return _wrapper
 
-    print a, kw
-    return wrapper
-
-  def add_route(self, *a, **kw):
-    pass
+  def add_route(self, path, *a, **kw):
+    print "Add router ", path, a, kw
+    self.router.add_entry(path, a, kw)
 
 
   def handle_request(self):
     pass
 
   def wsgi_handler(self, environ, start_response):
-
-    status = '200 OK'
+    self.router.select_route(environ)
+    status = http_status(200)
     headers = []
     exc_info = None
-    body_writer = start_response(status, headers, exc_info)
-
     body = "<html> it is"
 
+    body_writer = start_response(status, headers, exc_info)
+
     if self._write_using_writer:
-      body_writer(body)
-      return ''
+      if callable(body_writer):
+        body_writer(body)
+        return ''
+      else:
+        return body
     else:
       return body
 
 
 
-def wsgi_handler(environ, start_response):
+
+
+
+
+
+pan = CookingPot()
+
+
+
+# expose some globals, be bottle compatible ;-)
+route = pan.route
+
+
+def _wsgi_handler(environ, start_response):
   print "External WSGI handler ..."
-  # forward request to global scope Cruet instance
-  return cr.wsgi_handler(environ, start_response)
+  # forward request to global scope object
+  return pan.wsgi_handler(environ, start_response)
 
-
-
-
-
-
-
-cr = Cruet()
-
-
-
-
-
-
-
-# expose functions :
-route = cr.route
-add_route = cr.add_route
+def wsgi_interface():
+  return _wsgi_handler
 
 # expose WSGI handler
-application = wsgi_handler
-
-
-
-
+application = wsgi_interface()
 
 def run(server_class=None, **opts):
   if server_class is None:
     server_class = WSGIRefServer
   handle = server_class(**opts)
-  handle.run(wsgi_handler)
+  handle.run(_wsgi_handler)
 
 if __name__ == '__main__':
   run()
