@@ -95,9 +95,8 @@ class AbstractRouter(object):
   def _pre_process(self, kw):
     return kw
 
-  def add_entry(self, handler, *a, **kw):
-    kw['args'] = a
-    kw['handler'] = handler
+  def add_entry(self, testable, **kw):
+    kw['testable'] = testable
     self._routes.append(self._pre_process(**kw))
     pass
 
@@ -114,7 +113,7 @@ class AbstractRouter(object):
     return None
 
 
-ROUTE_CHECK_UNDEF = -1
+ROUTE_CHECK_UNDEF = None
 ROUTE_CHECK_STRSTR = 1
 ROUTE_CHECK_SIMPLE = 2
 ROUTE_CHECK_REGEX = 3
@@ -131,11 +130,14 @@ METHOD_POST = ['POST']
 
 class DefaultRouter(AbstractRouter):
 
-  def _pre_process(self, handler=None, route_type=None, **other):
+  def _pre_process(self, handler=None, route_type=ROUTE_CHECK_UNDEF, **other):
 
-    if route_type is None:
+    if route_type == ROUTE_CHECK_UNDEF:
       print "route type autodetect ..."
+      print `handler`
+      print type(handler)
       if callable(handler):
+        print "Route is callable !"
         route_type = ROUTE_CHECK_CALL
       else:
         print type()
@@ -179,15 +181,15 @@ class CookingPot(object):
       router = router_class()
     pass
 
-  def route(self, *a, **kw):
+  def route(self, testable, *a, **kw):
     def _wrapper(f):
-      print "Route wrapped :", f
-      self.add_route(f, a, kw)
+      print " ** wrapped : ", f , " ** "
+      self.add_route(testable, target=f, **kw)
     return _wrapper
 
-  def add_route(self, path, *a, **kw):
-    print "Add router ", path, a, kw
-    self.router.add_entry(path, a, kw)
+  def add_route(self, testable, target=None, **kw):
+    print "Add router [%s] -> [%s] (%s)" % (testable, target, kw)
+    self.router.add_entry(testable, target=target, **kw)
 
 
   def handle_request(self):
