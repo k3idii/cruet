@@ -87,30 +87,62 @@ class CIDict(dict): # Case Insensitive Dict
   pass
 
 
+
+class HttpMessage(object):
+  _headers = []
+  _body = ''
+
+
+class HttpRequest(HttpMessage):
+  pass
+
+class HttpResponse(HttpMessage):
+  pass
+
+class TheContext(object):
+  pass
+
+
+
+
+
 class AbstractRouter(object):
   _routes = []
+  default = None
+
   def __init__(self):
     pass
 
   def _pre_process(self, kw):
     return kw
 
+  def _default_route(self):
+    if callable(self.default):
+      self.default()
+
   def add_entry(self, testable, **kw):
     kw['testable'] = testable
     self._routes.append(self._pre_process(**kw))
     pass
 
-  def test_route(self, env, route):
-    return True
+  def test_route(self, env, testable, **route_args):
+    return self.ret_false()
 
-  def use_route(self, route):
-    return None
+  def use_route(self, route, meta):
+    return (route['target'], route, meta)
+
+  def ret_false(self):
+    return (False, None)
+
+  def ret_true(self, meta=None):
+    return (True, meta)
 
   def select_route(self, env):
     for route in self._routes:
-      if self.test_route(env, route):
-        return self.use_route(route)
-    return None
+      result, meta = self.test_route(env, **route)
+      if result:
+        return self.use_route(route,meta)
+    return (self._default_route, None, None)
 
 
 ROUTE_CHECK_UNDEF = None
@@ -127,47 +159,55 @@ def method(m):
 METHOD_GET = ['GET']
 METHOD_POST = ['POST']
 
+def _generator_caller(self):
+  pass
 
 class DefaultRouter(AbstractRouter):
 
-  def _pre_process(self, handler=None, route_type=ROUTE_CHECK_UNDEF, **other):
+  def _pre_process(self, **kw):
+    testable = kw.get('testable')
+    target = kw.get('target', None)
+    route_type = kw.get('route_type', ROUTE_CHECK_UNDEF)
 
-    if route_type == ROUTE_CHECK_UNDEF:
+    if route_type != ROUTE_CHECK_UNDEF:
       print "route type autodetect ..."
-      print `handler`
-      print type(handler)
-      if callable(handler):
-        print "Route is callable !"
-        route_type = ROUTE_CHECK_CALL
-      else:
-        print type()
-
+      print `testable`
+      print type(testable)
+      if isinstance(testable,basestring):
+        print "STRING !"
+      if callable(testable):
+        print "Testable is callable -> func test ?"
+        if target is None:
+          route_type = ROUTE_GENERATOR
+        else:
+          route_type = ROUTE_CHECK_CALL
+      kw['route_type'] = route_type
+    if route_type == ROUTE_GENERATOR:
+      kw['target'] = _generator_caller
 
     print "Route type " , route_type
 
-    return dict(handler=handler, route_type=route_type).update(other)
+    return kw
 
-  def test_route(self, env, route):
-    print route
-    return False
+  def test_route(self, env, testable, route_type=ROUTE_CHECK_UNDEF, **route_args):
+    print "TEST", testable
+    if route_type == ROUTE_CHECK_UNDEF:
+      pass
+      # raise Exception("invalid route type !")
+    print route_type, ROUTE_GENERATOR
+    if route_type == ROUTE_GENERATOR:
+      print "OMG YES YES YES "
+      target = testable(env)
+      print "GENERATOR ", target
+      if target is not None:
+        return self.ret_true(target)
+    return self.ret_false()
 
 
 
 
 
 
-
-
-class HttpMessage(object):
-  _headers = []
-  _body = ''
-
-
-class HttpRequest(HttpMessage):
-  pass
-
-class HttpResponse(HttpMessage):
-  pass
 
 
 
@@ -178,8 +218,11 @@ class CookingPot(object):
 
   def __init__(self, router_class=None):
     if router_class:
-      router = router_class()
-    pass
+      self.router = router_class()
+    self.router.default = self.default_handler
+
+  def default_handler(self, ctx):
+    return "404 None !"
 
   def route(self, testable, *a, **kw):
     def _wrapper(f):
@@ -196,7 +239,9 @@ class CookingPot(object):
     pass
 
   def wsgi_handler(self, environ, start_response):
-    self.router.select_route(environ)
+    ctx = self.router.select_route(environ)
+    print ctx
+
     status = http_status(200)
     headers = []
     exc_info = None

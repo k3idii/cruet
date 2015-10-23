@@ -28,6 +28,7 @@ def router_generator(env):
   def handle4(ctx):
     return "handler_of_router"
   return handle4
+
 sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
 
 
