@@ -1,7 +1,7 @@
 import saucepan as sauce
 
 
-@sauce.route('/hello/<name>')
+@sauce.route('/hello/<name>', check_method=["GET","POST"])
 def handle(ctx, name=None):
   print ctx.request.headers.get('test',None)
   ctx.response.headers.set('test', 'Yes')
@@ -18,16 +18,24 @@ def handle2(ctx, *args_from_tester):
 
 
 
-@sauce.pan.route('/a/b/c', route_type=sauce.ROUTE_CHECK_STRSTR)
+@sauce.pan.route('/a/b/c', route_type=sauce.ROUTE_CHECK_STR)
 def handle3(ctx, *a):
+  ctx.response.headers['x-test'] = 1
   return "Handle 3"
 
 
 
-def router_generator(env):
+def router_generator(ctx):
+  print "Hello from generator !"
+
   def handle4(ctx):
-    return "handler_of_router"
-  return handle4
+    print "Hello from generated function"
+    ctx.response.headers['test'] = ['yes']
+    return "Handler from generator !"
+
+  if ctx.request.headers.has('x'):
+    return handle4
+  return None
 
 sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
 
