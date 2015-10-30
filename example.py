@@ -7,21 +7,28 @@ def handle(ctx, name=None):
   ctx.response.headers.set('test', 'Yes')
   return "Hello <b>{0}</b>".format(name)
 
+@sauce.route('/bye/(.)(.)(?p=x1.*)/bye', route_type=sauce.ROUTE_CHECK_REGEX)
+def handle_re(ctx, *a, **kw):
+  print "Hello from re-base route !"
+  return 'HANDLE RE %s | %s <-- ' % ( str(a), str(kw) )
 
 
-def my_route_tester(env):
-  return True, 1,2,3
+def my_route_tester(ctx):
+  if 'test2' in ctx.request.path:
+    return True, 'value 1', 'val two'
+  return False
 
 @sauce.route(my_route_tester) # can do check = ROUTER_CHECK_CALL
 def handle2(ctx, *args_from_tester):
-  return "Handler 2 ",args_from_tester
+  print "Hello from handle2"
+  return "Handler 2 " + `args_from_tester`
 
 
 
 @sauce.pan.route('/a/b/c', route_type=sauce.ROUTE_CHECK_STR)
 def handle3(ctx, *a):
   ctx.response.headers['x-test'] = 1
-  return "Handle 3"
+  return "Handle 3, match /a/b/c"
 
 
 

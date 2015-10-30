@@ -6,6 +6,8 @@
 import httplib
 from collections import OrderedDict
 from abc import abstractmethod
+import re
+
 
 __author__ = 'KeiDii'
 __version__ = '0.2'
@@ -22,6 +24,15 @@ HTTP_CODES[431] = "Request Header Fields Too Large"
 
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
 
+
+def _re_get_args_kwargs(exp, mo):
+  idx = exp.groupindex.values()
+  args = []
+  kwargs = mo.groupdict()
+  for i in range(exp.groups):
+      if i not in idx: # not a groupdict
+        args.append(mo.group(1+i))
+  return args, kwargs
 
 def get_default_http_message(code):
   c = int(code) / 100
@@ -96,8 +107,8 @@ class CaseInsensitiveHttpEnv(object):
 
   def __init__(self, env):
     self._env = env
-    for k,v in env.iteritems():
-      print k,v
+    #for k,v in env.iteritems():
+    #  print k,v
 
   def __getitem__(self, item):
     return self.get(item, None)
@@ -114,7 +125,7 @@ class CaseInsensitiveHttpEnv(object):
     else:
       item = "HTTP_" + item
     print "GET KEY ", item
-    return self._env[item]
+    return self._env.get(item, default) # TODO: support requtre
 
   def has(self, key):
     print "HAS ", key
@@ -146,10 +157,15 @@ class HttpRequest(HttpMessage):
     self.headers = CaseInsensitiveHttpEnv(env)
     self.verb = env.get('REQUEST_METHOD')
     self.version = env.get('SERVER_PROTOCOL')
+    self.path = env.get('PATH_INFO')
+    self.host = env.get('HTTP_HOST')
     self._http_version, self._http_version = self.version.split('/')
 
   def uri(self, host=False):
-    pass
+    if host:
+      return self.host + self.path
+    else:
+      return self.path
 
 
 CONTENT_LENGTH_HEADER = 'Content-Length'
@@ -239,18 +255,78 @@ METHOD_POST = ['POST']
 
 
 class DefaultRouter(AbstractRouter):
-  type_mapping = {}
+
 
   def setup(self):
-    self.type_mapping[ROUTE_CHECK_STR] = self._test_str
+    # TODO : revrite this as classes ? (need benchmark !)
+    self._type_mapping = {
+    ROUTE_CHECK_STR : self._test_str ,
+    ROUTE_CHECK_SIMPLE : self._test_simple ,
+    ROUTE_CHECK_REGEX : self._test_re ,
+    ROUTE_CHECK_CALL : self._test_call ,
+    ROUTE_GENERATOR : self._test_generator ,
+  }
+
+  def _final_call(self, ctx, fn, a, kw):
+    data = fn(ctx, *a, **kw)
+    if data:
+      ctx.response.body = data
 
 
-  def _test_str(self, ctx, route):
-    pass
+  def _test_str(self, ctx, testable='', target=None, **route):
+    uri = ctx.request.uri()
+    if uri == testable:
+      self._final_call(ctx, target, [], route)
+      return True
+    return False
 
-  def _pre_process(self, **kw):
-    testable = kw.get('testable')
-    target = kw.get('target', None)
+  def _test_simple(self, ctx, **route):
+    return False
+
+  def _test_re(self, ctx, testable=None, target=None, _re=None, **route):
+    print "REGEXP POWER !"
+    uri = ctx.request.uri()
+    mo = _re.match(uri)
+    if not mo:
+      return False
+    args, kwargs = _re_get_args_kwargs(_re, mo)
+    route.update(kwargs)
+    self._final_call(ctx, target, args, route)
+    return True
+
+  def _test_call(self, ctx, testable=None, target=None, **route):
+    ret_val = testable(ctx, **route)
+    print "Function returns ", ret_val
+    args = []
+    if isinstance(ret_val,tuple) or isinstance(ret_val,list):
+      bool_val = ret_val[0]
+      args = ret_val[1:]
+    else:
+      bool_val = ret_val
+    if bool_val:
+      self._final_call(ctx, target, args, route)
+      return True
+    return False
+
+
+  def _test_generator(self, ctx, testable=None, target=None, **route):
+    ret_val = testable(ctx, **route)
+    print "GENERATOR SAYS:", ret_val
+    if ret_val is None:
+      return False
+    args = []
+    if isinstance(ret_val,tuple) or isinstance(ret_val,list):
+      func = ret_val[0]
+      args = ret_val[1:]
+    else:
+      func = ret_val
+    self._final_call(ctx, func, args, route)
+    return True
+
+  def _pre_process(self, **kw): # TODO : this could return object with proper methods/values/etc
+    print kw
+    testable = kw.get('testable') # <- required argument
+    target = kw.get('target', None) # <- ref to func || None
     route_type = kw.get('route_type', ROUTE_CHECK_UNDEF)
     if 'headers' not in kw:
       kw['headers'] = []
@@ -258,73 +334,55 @@ class DefaultRouter(AbstractRouter):
       if not isinstance(kw['headers'], list):
         kw['headers'] = []
 
-    for key in kw:
+    # convert al check_%s key into required header names
+    for key in kw.keys():
       if key.startswith("check_"):
         item = key.split("_", 1)[1]
         kw['headers'].append((item, kw[key]))
+        del kw[key]
 
-    if route_type != ROUTE_CHECK_UNDEF:
-      print "* Route type autodetect ..."
-      print "  -> testable: ", `testable`, type(testable)
+    if route_type == ROUTE_CHECK_UNDEF:
+      print "* Route type autodetect -> testable: ", `testable`, testable.__class__
       if isinstance(testable, basestring):
         print "STRING !"
+        if "<" in testable:
+          print " $ quasi-re"
+          route_type = ROUTE_CHECK_SIMPLE
+        else:
+          print " $ str"
+          route_type = ROUTE_CHECK_STR
       if callable(testable):
+        # callable can be check or generator
         print "Testable is callable -> func test ?"
         if target is None:
           route_type = ROUTE_GENERATOR
         else:
           route_type = ROUTE_CHECK_CALL
       kw['route_type'] = route_type
+    else:
+      print "* Route type is set:", route_type
 
-
-
+    # setup proxy function to perform test.
+    # Setting this here allow to skip another switch-case construct in try_route
+    kw['_callable'] = self._type_mapping.get(route_type, None)
+    if route_type == ROUTE_CHECK_REGEX:
+      kw['_re'] = re.compile(testable)
+    if route_type == ROUTE_CHECK_SIMPLE:
+      parsed = ''
+      kw['_re'] = re.compile(parsed)
     return kw
 
-
-  def _test_generator(self, ctx, route):
-    pass
-
-  def try_route(self, ctx, _call=None, headers=None, **args):
+  def try_route(self, ctx, _callable=None, headers=None, route_type=None, **args):
+    print 'Trying ... ', args
     if headers and len(headers) > 0:
       for key, val in headers:
         if not ctx.request.headers.check(key, val):
           print "Did not get ", key, "", val
           return False
-    _callable
-
-
-  def try_route2(self, ctx, testable, route_type=ROUTE_CHECK_UNDEF, headers=None, **route_args):
-    print "TEST", testable
-    if route_type == ROUTE_CHECK_UNDEF:
-      pass
-      # raise Exception("invalid route type !")
-    print route_type, ROUTE_GENERATOR
-    ret_val = ''
-    request_uri = ""
-
-    if headers and len(headers) > 0:
-      for key, val in headers:
-        if not ctx.request.headers.check(key, val):
-          print "Did not get ", key, "", val
-          return False
-
-
-
-
-    if route_type == ROUTE_GENERATOR:
-      print "OMG YES YES YES "
-      target = testable(ctx)
-      if target is None:
-        return False
-      ret_val = target(ctx)
-    elif route_type == ROUTE_CHECK_STR:
-      return False
+    if _callable and callable(_callable):
+      return _callable(ctx, **args)
     else:
-      return False
-
-    if ret_val is not None:
-      ctx.response.body = str(ret_val)
-    return True
+      print "Well.. fuck !", args
 
 
 DEFAULT_HEADERS = {
@@ -346,6 +404,18 @@ class CookingPot(object):
     ctx.response.status_code = 404
     return "Nope!"
 
+  def handle_error(self, ctx, error):
+      import traceback
+      import sys
+      info = sys.exc_info()
+      traceback.print_exception(*info)
+      body = "EPIC FAIL:<br><pre>\n"
+      body += '\n'.join(traceback.format_exception(*info))
+      body += "\n\n</pre>"
+      ctx.response.body = body
+      ctx.response.status_code = 500
+      ctx.response.headers['Content-type']='text/html'
+
   def route(self, testable, **kw):
     def _wrapper(f):
       print " ** wrapped : ", f, " ** "
@@ -359,26 +429,19 @@ class CookingPot(object):
 
   def wsgi_handler(self, environ, start_response):
     exc_info = None
+    ctx = TheContext(environ)
+    for k, v in DEFAULT_HEADERS.iteritems():
+      ctx.response.headers[k] = v
     try:
       print " ----> "
-      ctx = TheContext(environ)
-      for k, v in DEFAULT_HEADERS.iteritems():
-        ctx.response.headers[k] = v
       self.router.select_route(ctx)
       ctx.response.finish()
-      body = ctx.response.body
-      headers = ctx.response.get_headers()
-      status = ctx.response.get_status()
       print " <---- "
     except Exception as ex:
-      import traceback
-      import sys
-
-      info = sys.exc_info()
-      traceback.print_exception(*info)
-      status = http_status(500)
-      headers = []
-      body = "html ok"
+      self.handle_error(ctx, ex)
+    body = ctx.response.body
+    headers = ctx.response.get_headers()
+    status = ctx.response.get_status()
     print "Will answer", status, headers
     body_writer = start_response(status, headers, exc_info)
     if self._write_using_writer:
