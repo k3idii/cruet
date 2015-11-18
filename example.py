@@ -4,13 +4,13 @@ import saucepan as sauce
 @sauce.route('/hello/<name>', check_method=["GET","POST"])
 def handle(ctx, name=None):
   print ctx.request.headers.get('test',None)
-  ctx.response.headers.set('test', 'Yes')
+  ctx.response.headers['test']='Yes'
   return "Hello <b>{0}</b>".format(name)
 
-@sauce.route('/bye/(.)(.)(?p=x1.*)/bye', route_type=sauce.ROUTE_CHECK_REGEX)
-def handle_re(ctx, *a, **kw):
-  print "Hello from re-base route !"
-  return 'HANDLE RE %s | %s <-- ' % ( str(a), str(kw) )
+@sauce.route('/bye/(.)(.)(?P<str1>.*)/bye', route_type=sauce.ROUTE_CHECK_REGEX)
+def handle_re(ctx, c1, c2, str1):
+  print "Hello from re-base route "
+  return "HANDLE RE %s|%s|%s !" % (c1, c2, str1)
 
 
 def my_route_tester(ctx):
@@ -24,12 +24,10 @@ def handle2(ctx, *args_from_tester):
   return "Handler 2 " + `args_from_tester`
 
 
-
 @sauce.pan.route('/a/b/c', route_type=sauce.ROUTE_CHECK_STR)
 def handle3(ctx, *a):
   ctx.response.headers['x-test'] = 1
   return "Handle 3, match /a/b/c"
-
 
 
 def router_generator(ctx):
