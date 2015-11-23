@@ -428,7 +428,7 @@ class CookingPot(object):
   def add_route(self, testable, target=None, **kw):
     # print "Add router [%s] -> [%s] (%s)" % (testable, target, kw)
     self.router.add_entry(testable, target=target, **kw)
-
+i:q
   def wsgi_handler(self, environ, start_response):
     exc_info = None
     ctx = TheContext(environ)
