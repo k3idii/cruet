@@ -7,7 +7,10 @@
 
     <link rel="stylesheet" href="stylesheets/styles.css">
     <link rel="stylesheet" href="stylesheets/github-light.css">
-    
+   
+<link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/8.9.1/styles/monokai_sublime.min.css">
+<script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/8.9.1/highlight.min.js"></script>
+
     <script src="javascripts/micromarkdown.min.js"></script>
     <script src="javascripts/jquery-1.11.3.min.js"></script>
     
@@ -52,10 +55,16 @@
        var loc = window.location.href;
        var cur_hash = window.location.hash;
 
-       var fn = name + ".md";
+       var fn = "p_" + name + ".html"; // ".md";
+       
        jQuery.get(fn, function(data){
-        data = micromarkdown.parse(data);
+        // data = micromarkdown.parse(data);
         jQuery("#content").html(data);
+        hljs.initHighlighting();
+        jQuery("pre").each(function(i,j){ 
+         hljs.highlightBlock(j);
+        });
+
        }).fail(function(){
         jQuery("#content").html("Error loading content ... ");
        });
