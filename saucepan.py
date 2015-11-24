@@ -244,6 +244,7 @@ class AbstractRouter(object):
 
 
 ROUTE_CHECK_UNDEF = None
+ROUTE_CHECK_ALWAYS = 0xff
 ROUTE_CHECK_STR = 1
 ROUTE_CHECK_SIMPLE = 2
 ROUTE_CHECK_REGEX = 3
@@ -275,6 +276,7 @@ class DefaultRouter(AbstractRouter):
   def setup(self):
     # TODO : rewrite dict routes to classes ? (need to benchmark !)
     self._type_mapping = {
+      ROUTE_CHECK_ALWAYS: self._test_always,
       ROUTE_CHECK_STR: self._test_str,
       ROUTE_CHECK_SIMPLE: self._test_re,
       ROUTE_CHECK_REGEX: self._test_re,
@@ -282,10 +284,14 @@ class DefaultRouter(AbstractRouter):
       ROUTE_GENERATOR: self._test_generator,
     }
 
-  def _test_str(self, ctx, testable='', target=None, **_):
+  def _test_always(self, ctx, testable=None, target=None, **kw):
+    _router_final_call(ctx, target, [], kw)
+    return True
+
+  def _test_str(self, ctx, testable='', target=None, **ex):
     uri = ctx.request.uri()
     if uri == testable:
-      _router_final_call(ctx, target, [], route)
+      _router_final_call(ctx, target, [], ex)
       return True
     return False
 
@@ -347,7 +353,9 @@ class DefaultRouter(AbstractRouter):
         del kw[key]
 
     if route_type == ROUTE_CHECK_UNDEF:
-      if isinstance(testable, basestring):
+      if testable is None:
+        route_type = ROUTE_CHECK_ALWAYS
+      elif isinstance(testable, basestring):
         if "<" in testable:
           route_type = ROUTE_CHECK_SIMPLE
         else:
@@ -395,6 +403,8 @@ DEFAULT_HEADERS = {
 class CookingPot(object):
   _write_using_writer = False
   router = DefaultRouter()
+  _be_verbose = True
+  _exception_handlers = []
 
   def __init__(self, router_class=None):
     if router_class:
@@ -403,19 +413,49 @@ class CookingPot(object):
 
   def _default_route(self, ctx):
     ctx.response.status_code = 404
-    return "Nope!"
+    return "Not found!"
+
+  def handle_exception(self, ex_type, **kw):
+    def _wrapper(f):
+      self.add_exception_handler(ex_type, f, **kw)
+    return _wrapper
+
+  def add_exception_handler(self, ex_type, fn, **kw):
+    self._exception_handlers.append(
+      dict(
+        ex_type = ex_type,
+        handler = fn,
+        kwargs = kw,
+      )
+    )
 
   def handle_error(self, ctx, error):
+    ctx.response.status_code = 500
+    ctx.response.status_message = "Server Fail"
+    # print ">>>>", type(error), type(error).__name__
+    ex_class = type(error)
+    for entry in self._exception_handlers:
+      if isinstance(error,entry['ex_type']):
+        return entry['handler'](ctx, error, **entry['kwargs'])
+    if self._be_verbose:
+      return self._verbose_error_handler(ctx, error)
+    else:
+      return self._silent_error_handler(ctx, error)
+
+
+  def _silent_error_handler(self, ctx, error):
+    ctx.response.headers['Content-type'] = 'text/html'
+    ctx.response.body = "500: server fail !"
+
+  def _verbose_error_handler(self, ctx, error):
     import traceback
     import sys
-
     info = sys.exc_info()
     traceback.print_exception(*info)
     body = "SERVER FAIL:<br><pre>\n"
     body += '\n'.join(traceback.format_exception(*info))
     body += "\n\n</pre>"
     ctx.response.body = body
-    ctx.response.status_code = 500
     ctx.response.headers['Content-type'] = 'text/html'
 
   def route(self, testable, **kw):
@@ -428,7 +468,6 @@ class CookingPot(object):
   def add_route(self, testable, target=None, **kw):
     # print "Add router [%s] -> [%s] (%s)" % (testable, target, kw)
     self.router.add_entry(testable, target=target, **kw)
-i:q
   def wsgi_handler(self, environ, start_response):
     exc_info = None
     ctx = TheContext(environ)

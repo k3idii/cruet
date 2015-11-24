@@ -44,11 +44,22 @@ def router_generator(ctx):
 
 sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
 
+@sauce.pan.route("/crash")
+def crash_it(ctx):
+  if 1+1 == 2:
+    raise Exception("Not real exception ...")
+  return "OK"
 
 
+@sauce.pan.route(None)
+def default_route(ctx):
+  return "Hello. This is default handler !"
 
 
-
+@sauce.pan.handle_exception(Exception)
+def handle_exception1(ctx,err):
+  print ctx, err
+  ctx.response.body = "Exception handled, do not panic !!!"
 
 
 if __name__ == '__main__':
