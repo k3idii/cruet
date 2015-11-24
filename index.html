@@ -7,6 +7,10 @@
 
     <link rel="stylesheet" href="stylesheets/styles.css">
     <link rel="stylesheet" href="stylesheets/github-light.css">
+    
+    <script src="javascripts/micromarkdown.min.js"></script>
+    <script src="javascripts/jquery-1.11.3.min.js"></script>
+    
     <meta name="viewport" content="width=device-width">
     <!--[if lt IE 9]>
     <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
@@ -37,6 +41,17 @@
         <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
       </footer>
     </div>
+    <script>
+     function load_content(name){
+       var fn = name + ".md";
+       jQuery.get(fn, function(data){
+        jQuery("#content").html(data);
+       });
+     }
+     jQuery("document").ready(function(){ 
+        load_content("main"); 
+     });
+    </script>
     <script src="javascripts/scale.fix.js"></script>
     
   </body>
