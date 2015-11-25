@@ -64,7 +64,7 @@ def default_handler(ctx):
 
 @sauce.pan.handle_exception(Exception)
 def error_handler(ctx, err):
-  ctx.response.body = "Server fail : " + str(err)
+  return "Server fail : " + str(err)
 
 sauce.run(port=8080)
 
