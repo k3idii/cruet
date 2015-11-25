@@ -360,7 +360,7 @@ class DefaultRouter(AbstractRouter):
           route_type = ROUTE_CHECK_SIMPLE
         else:
           route_type = ROUTE_CHECK_STR
-      if callable(testable):   # callable can be check or generator
+      if callable(testable):  # callable can be check or generator
         print "Testable is callable -> func test ?"
         if target is None:
           route_type = ROUTE_GENERATOR
@@ -368,7 +368,7 @@ class DefaultRouter(AbstractRouter):
           route_type = ROUTE_CHECK_CALL
       kw['route_type'] = route_type
     else:
-      #print "* Route type already set to :", route_type
+      # print "* Route type already set to :", route_type
       pass
 
     # setup proxy function to perform test.
@@ -391,7 +391,7 @@ class DefaultRouter(AbstractRouter):
     if _callable and callable(_callable):
       return _callable(ctx, **args)
     else:
-      print "Well.. fsck !", args
+      print "Well..  ouch!", args
 
 
 DEFAULT_HEADERS = {
@@ -399,6 +399,25 @@ DEFAULT_HEADERS = {
   'Server': 'Saucepan (%s)' % __version__,
 }
 
+def _silent_error_handler(ctx, error):
+  ctx.response.headers['Content-type'] = 'text/html'
+  return "500: server fail !"
+
+def _verbose_error_handler(ctx, error):
+  import traceback
+  import sys
+
+  info = sys.exc_info()
+  traceback.print_exception(*info)
+  body = "SERVER FAIL:<br><pre>\n"
+  body += '\n'.join(traceback.format_exception(*info))
+  body += "\n\n</pre>"
+  ctx.response.headers['Content-type'] = 'text/html'
+  return body
+
+def _default_request_handler(ctx):
+  ctx.response.status_code = 404
+  return "Not found!"
 
 class CookingPot(object):
   _write_using_writer = False
@@ -409,54 +428,33 @@ class CookingPot(object):
   def __init__(self, router_class=None):
     if router_class:
       self.router = router_class()
-    self.router.default = self._default_route
-
-  def _default_route(self, ctx):
-    ctx.response.status_code = 404
-    return "Not found!"
+    self.router.default = _default_request_handler
 
   def handle_exception(self, ex_type, **kw):
     def _wrapper(f):
       self.add_exception_handler(ex_type, f, **kw)
+
     return _wrapper
 
   def add_exception_handler(self, ex_type, fn, **kw):
     self._exception_handlers.append(
       dict(
-        ex_type = ex_type,
-        handler = fn,
-        kwargs = kw,
+        ex_type=ex_type,
+        handler=fn,
+        kwargs=kw,
       )
     )
 
   def handle_error(self, ctx, error):
     ctx.response.status_code = 500
     ctx.response.status_message = "Server Fail"
-    # print ">>>>", type(error), type(error).__name__
-    ex_class = type(error)
     for entry in self._exception_handlers:
-      if isinstance(error,entry['ex_type']):
+      if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
     if self._be_verbose:
-      return self._verbose_error_handler(ctx, error)
+      return _verbose_error_handler(ctx, error)
     else:
-      return self._silent_error_handler(ctx, error)
-
-
-  def _silent_error_handler(self, ctx, error):
-    ctx.response.headers['Content-type'] = 'text/html'
-    ctx.response.body = "500: server fail !"
-
-  def _verbose_error_handler(self, ctx, error):
-    import traceback
-    import sys
-    info = sys.exc_info()
-    traceback.print_exception(*info)
-    body = "SERVER FAIL:<br><pre>\n"
-    body += '\n'.join(traceback.format_exception(*info))
-    body += "\n\n</pre>"
-    ctx.response.body = body
-    ctx.response.headers['Content-type'] = 'text/html'
+      return _silent_error_handler(ctx, error)
 
   def route(self, testable, **kw):
     def _wrapper(f):
@@ -468,6 +466,7 @@ class CookingPot(object):
   def add_route(self, testable, target=None, **kw):
     # print "Add router [%s] -> [%s] (%s)" % (testable, target, kw)
     self.router.add_entry(testable, target=target, **kw)
+
   def wsgi_handler(self, environ, start_response):
     exc_info = None
     ctx = TheContext(environ)
@@ -479,7 +478,7 @@ class CookingPot(object):
       ctx.response.finish()
       print " <---- DONE !"
     except Exception as ex:
-      self.handle_error(ctx, ex)
+      ctx.response.body = self.handle_error(ctx, ex)
     body = ctx.response.body
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()

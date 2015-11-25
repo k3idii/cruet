@@ -59,7 +59,7 @@ def default_route(ctx):
 @sauce.pan.handle_exception(Exception)
 def handle_exception1(ctx,err):
   print ctx, err
-  ctx.response.body = "Exception handled, do not panic !!!"
+  return "Exception handled, do not panic !!!"
 
 
 if __name__ == '__main__':
