@@ -21,7 +21,7 @@ Well, why not ? :-D
 
 import saucepan as sauce
 
-@sauce.pan.route('/<name>')
+@sauce.pan.route('/&ltname&gt')
 def handle_hello(ctx, name=None):
   return "Hello {0:s} !".format(name)
 
@@ -33,6 +33,44 @@ sauce.run(port=8080)
 Run <b>python example.py</b>, then open <i>http://127.0.0.1:8080/John</i> in browser.
 Yup. It is working ;-)
 </p>
+
+<h1>advanced usage ... </h1>
+
+<pre class="python">
+
+import saucepan as sauce
+
+def handler_generator(ctx):
+  
+  def handle1(ctx):
+    return "Handler 1"
+
+  def handle2(ctx):
+    return "Handler 2"
+
+  if "test" in ctx.request.path:
+    return handle1
+  elif "xxx" in ctx.request.path:
+    return handle2
+  else:
+    return None
+  
+sauce.pan.add_router(handler_generator, route_type=sauce.ROUTE_GENERATOR)
+
+@sauce.pan.route(None):
+def default_handler(ctx):
+  ctx.response.status_code = 403
+  return "Nope !"
+
+@sauce.pan.handle_exception(Exception)
+def error_handler(ctx, err):
+  ctx.response.body = "Server fail : " + str(err)
+
+sauce.run(port=8080)
+
+</pre>
+
+
 
 <h1> howto() </h1>
 
