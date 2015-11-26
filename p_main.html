@@ -37,36 +37,88 @@ Yup. It is working ;-)
 <h1>advanced usage ... </h1>
 
 <pre class="python">
-
 import saucepan as sauce
 
-def handler_generator(ctx):
-  
-  def handle1(ctx):
-    return "Handler 1"
+# --------------------------------------------------------------------
+# classic add route (like bottle, converted to regex)
+@sauce.route('/hello/&lt;name&gt;', check_method=[&quot;GET&quot;,&quot;POST&quot;], custom_param=&quot;Hello&quot;)
+def handle(ctx, name=None, custom_param=&quot;&lt;missing&gt;&quot;):
+  print ctx.request.headers.get('test',None)
+  ctx.response.headers['test']='Yes'
+  return &quot;{0:s} &lt;b&gt;{1:s}&lt;/b&gt;&quot;.format(custom_param, name)
 
-  def handle2(ctx):
-    return "Handler 2"
+# --------------------------------------------------------------------
+# regex in route
+@sauce.route('/bye/(.)(.)(?P&lt;str1&gt;.*)/bye', route_type=sauce.ROUTE_CHECK_REGEX)
+def handle_re(ctx, c1, c2, str1='none'):
+  print &quot;Hello from re-base route &quot;
+  return &quot;HANDLE RE %s|%s|%s !&quot; % (c1, c2, str1)
 
-  if "test" in ctx.request.path:
-    return handle1
-  elif "xxx" in ctx.request.path:
-    return handle2
-  else:
-    return None
-  
-sauce.pan.add_router(handler_generator, route_type=sauce.ROUTE_GENERATOR)
+# --------------------------------------------------------------------
+#route tester as callback
+def my_route_tester(ctx):
+  if 'test2' in ctx.request.path:
+    return True, 'value 1', 'val two'
+  return False
 
-@sauce.pan.route(None):
-def default_handler(ctx):
-  ctx.response.status_code = 403
-  return "Nope !"
+@sauce.route(my_route_tester) # will auto detect type = ROUTER_CHECK_CALL
+def handle2(ctx, *args_from_tester):
+  print &quot;Hello from handle2&quot;
+  return &quot;Handler 2 &quot; + `args_from_tester`
 
+# --------------------------------------------------------------------
+# full string match (forced by route_type)
+@sauce.pan.route('/a/b/c', route_type=sauce.ROUTE_CHECK_STR)
+def handle3(ctx, *a):
+  ctx.response.headers['x-test'] = 1
+  return &quot;Handle 3, match /a/b/c&quot;
+
+# --------------------------------------------------------------------
+# Generator as route
+def router_generator(ctx):
+  print &quot;&gt;&gt; Generator is trying to run ...&quot;
+
+  def handle4(ctx):
+    print &quot;Hello from generated function&quot;
+    ctx.response.headers['test'] = ['yes']
+    return &quot;Handler from generator !&quot;
+
+  if ctx.request.headers.has('xxx'):
+    return handle4
+  return None
+
+sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
+# ^--- also can to this using @decorator ;-)
+
+
+# --------------------------------------------------------------------
+# route that raise Exception ...
+@sauce.pan.route(&quot;/crash&quot;)
+def crash_it(ctx):
+  if 1+1 == 2:
+    raise Exception(&quot;Not real exception ...&quot;)
+  return &quot;OK&quot;
+
+
+# --------------------------------------------------------------------
+# default route (none == always match)
+@sauce.pan.route(None)
+def default_route(ctx):
+  return &quot;Hello. This is default handler !&quot;
+
+
+# --------------------------------------------------------------------
+# register exception handler (like route ^_^)
 @sauce.pan.handle_exception(Exception)
-def error_handler(ctx, err):
-  return "Server fail : " + str(err)
+def handle_exception1(ctx,err):
+  print &quot;Exception handler : &quot;,ctx, err
+  return &quot;Exception handled, do not panic !!!&quot; 
 
-sauce.run(port=8080)
+if __name__ == '__main__':
+  sauce.run(host='0.0.0.0', port=12345)
+else:
+  application = sauce.wsgi_interface()
+
 
 </pre>
 
