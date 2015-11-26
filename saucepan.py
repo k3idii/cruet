@@ -1,12 +1,12 @@
 # !/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
-#
 
 import httplib
 from collections import OrderedDict
 from abc import abstractmethod
 import re
+import logging
 
 __author__ = 'KeiDii'
 __version__ = '0.3'
@@ -87,7 +87,7 @@ class WSGIRefServer(GenericServer):
 
     srv_class = ref_srv.WSGIServer
     hnd_class = FixedHandler
-    print "Starting WSGIRef simple server on {0}:{1}".format(host, port)
+    logging.debug("Starting WSGIRef simple server on {0}:{1}".format(host, port))
     self.server = ref_srv.make_server(host, port, wsgi_app, srv_class, hnd_class)
     try:
       self.server.serve_forever()
@@ -134,7 +134,6 @@ class CaseInsensitiveHttpEnv(object):
     return val
 
   def has(self, key):
-    print "HAS ", key
     return self.get(key) is not None
 
   def check(self, key, val):
@@ -182,9 +181,10 @@ class HttpResponse(HttpMessage):
   status_message = None
   headers = LastUpdatedOrderedDict()
   fix_content_length = True
+  http_version = ''
 
   def __init__(self, version='HTTP/1.1'):
-    pass
+    self.http_version = version
 
   def get_status(self):
     return http_status(self.status_code, self.status_message)
@@ -227,6 +227,7 @@ class AbstractRouter(object):
       self.default(ctx, **kw)
 
   def add_entry(self, testable, **kw):
+    logging.debug("Adding new route [testable=%s] "%str(testable))
     kw['testable'] = testable
     self._routes.append(self._pre_process(**kw))
     pass
@@ -239,6 +240,7 @@ class AbstractRouter(object):
     for rt in self._routes:
       if self.try_route(ctx, **rt):
         return ctx
+    logging.warning("No valid route found ! Try default ...")
     self._default_route(ctx)
     return ctx
 
@@ -308,7 +310,6 @@ class DefaultRouter(AbstractRouter):
 
   def _test_call(self, ctx, testable=None, target=None, **ex):
     ret_val = testable(ctx, **ex)
-    print "Function returns ", ret_val
     args = []
     if isinstance(ret_val, tuple) or isinstance(ret_val, list):
       bool_val = ret_val[0]
@@ -322,7 +323,6 @@ class DefaultRouter(AbstractRouter):
 
   def _test_generator(self, ctx, testable=None, target=None, **ex):
     ret_val = testable(ctx, **ex)
-    print "GENERATOR SAYS:", ret_val
     if ret_val is None:
       return False
     args = []
@@ -335,7 +335,6 @@ class DefaultRouter(AbstractRouter):
     return True
 
   def _pre_process(self, **kw):  # TODO : this could return object with proper methods/values/etc
-    # print kw
     testable = kw.get('testable')  # <- required argument
     target = kw.get('target', None)  # <- ref to func || None
     route_type = kw.get('route_type', ROUTE_CHECK_UNDEF)
@@ -353,6 +352,7 @@ class DefaultRouter(AbstractRouter):
         del kw[key]
 
     if route_type == ROUTE_CHECK_UNDEF:
+      logging.debug("Route type is not set. Guessing ...")
       if testable is None:
         route_type = ROUTE_CHECK_ALWAYS
       elif isinstance(testable, basestring):
@@ -361,14 +361,14 @@ class DefaultRouter(AbstractRouter):
         else:
           route_type = ROUTE_CHECK_STR
       if callable(testable):  # callable can be check or generator
-        print "Testable is callable -> func test ?"
         if target is None:
           route_type = ROUTE_GENERATOR
         else:
           route_type = ROUTE_CHECK_CALL
       kw['route_type'] = route_type
+      logging.debug("Route type after guess: %s"%route_type)
     else:
-      # print "* Route type already set to :", route_type
+      # "* Route type already set to :", route_type
       pass
 
     # setup proxy function to perform test.
@@ -386,12 +386,11 @@ class DefaultRouter(AbstractRouter):
     if headers and len(headers) > 0:
       for key, val in headers:
         if not ctx.request.headers.check(key, val):
-          # print "Did not get ", key, "", val
           return False
     if _callable and callable(_callable):
       return _callable(ctx, **args)
     else:
-      print "Well..  ouch!", args
+      log.error("Ouch! problem with _callable !")
 
 
 DEFAULT_HEADERS = {
@@ -426,6 +425,7 @@ class CookingPot(object):
   _exception_handlers = []
 
   def __init__(self, router_class=None):
+    logging.debug("Main object init")
     if router_class:
       self.router = router_class()
     self.router.default = _default_request_handler
@@ -464,25 +464,22 @@ class CookingPot(object):
     return _wrapper
 
   def add_route(self, testable, target=None, **kw):
-    # print "Add router [%s] -> [%s] (%s)" % (testable, target, kw)
     self.router.add_entry(testable, target=target, **kw)
 
   def wsgi_handler(self, environ, start_response):
+    logging.debug('WSGI handler called ...')
     exc_info = None
     ctx = TheContext(environ)
     for k, v in DEFAULT_HEADERS.iteritems():
       ctx.response.headers[k] = v
     try:
-      print " ----> WSGI : run router "
       self.router.select_route(ctx)
       ctx.response.finish()
-      print " <---- DONE !"
     except Exception as ex:
       ctx.response.body = self.handle_error(ctx, ex)
     body = ctx.response.body
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()
-    print "Will answer", status, headers
     body_writer = start_response(status, headers, exc_info)
     if self._write_using_writer:
       if callable(body_writer):
@@ -512,13 +509,16 @@ application = wsgi_interface()
 
 
 def run(server_class=None, **opts):
+  logging.debug("Preparing WSGI server ... ")
   if server_class is None:
     server_class = WSGIRefServer
   handle = server_class(**opts)
+  logging.debug("Running server ... ")
   handle.run(_wsgi_handler)
 
 
 if __name__ == '__main__':
+  logging.warn("Running stanalone ?")
   run()
 
 # end
