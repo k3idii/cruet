@@ -7,6 +7,7 @@ from collections import OrderedDict
 from abc import abstractmethod
 import re
 import logging
+import json
 
 __author__ = 'KeiDii'
 __version__ = '0.3'
@@ -22,6 +23,12 @@ HTTP_CODES[429] = "Too Many Requests"
 HTTP_CODES[431] = "Request Header Fields Too Large"
 
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
+
+
+HEADER_CONTENT_LENGTH = 'Content-Length'
+HEADER_CONTENT_TYPE = 'Content-type'
+CONTENT_JSON = 'application/json'
+CONTENT_HTML = 'text/html'
 
 
 def _re_get_args_kwargs(exp, mo):
@@ -173,7 +180,7 @@ class HttpRequest(HttpMessage):
       return self.path
 
 
-CONTENT_LENGTH_HEADER = 'Content-Length'
+
 
 
 class HttpResponse(HttpMessage):
@@ -198,7 +205,7 @@ class HttpResponse(HttpMessage):
   def finish(self):  # calculate content-length header if not set
     if self.fix_content_length:
       s = len(self.body)
-      self.headers[CONTENT_LENGTH_HEADER] = str(s)
+      self.headers[HEADER_CONTENT_LENGTH] = str(s)
 
 
 class TheContext(object):
@@ -394,12 +401,12 @@ class DefaultRouter(AbstractRouter):
 
 
 DEFAULT_HEADERS = {
-  'Content-type': 'text/html',
+  HEADER_CONTENT_TYPE: CONTENT_HTML,
   'Server': 'Saucepan (%s)' % __version__,
 }
 
 def _silent_error_handler(ctx, error):
-  ctx.response.headers['Content-type'] = 'text/html'
+  ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_HTML
   return "500: server fail !"
 
 def _verbose_error_handler(ctx, error):
@@ -411,7 +418,7 @@ def _verbose_error_handler(ctx, error):
   body = "SERVER FAIL:<br><pre>\n"
   body += '\n'.join(traceback.format_exception(*info))
   body += "\n\n</pre>"
-  ctx.response.headers['Content-type'] = 'text/html'
+  ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_HTML
   return body
 
 def _default_request_handler(ctx):
@@ -421,7 +428,8 @@ def _default_request_handler(ctx):
 class CookingPot(object):
   _write_using_writer = False
   router = DefaultRouter()
-  _be_verbose = True
+  be_verbose = True
+  auto_json = True
   _exception_handlers = []
 
   def __init__(self, router_class=None):
@@ -451,7 +459,7 @@ class CookingPot(object):
     for entry in self._exception_handlers:
       if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
-    if self._be_verbose:
+    if self.be_verbose:
       return _verbose_error_handler(ctx, error)
     else:
       return _silent_error_handler(ctx, error)
@@ -474,10 +482,16 @@ class CookingPot(object):
       ctx.response.headers[k] = v
     try:
       self.router.select_route(ctx)
-      ctx.response.finish()
     except Exception as ex:
       ctx.response.body = self.handle_error(ctx, ex)
     body = ctx.response.body
+    if self.auto_json:
+      if isinstance(body, dict) or isinstance(body, list):
+        logging.debug('Apply auto JSON')
+        body  = json.dumps(body)
+        ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_JSON
+        ctx.response.body = body
+    ctx.response.finish()
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()
     body_writer = start_response(status, headers, exc_info)
@@ -491,7 +505,19 @@ class CookingPot(object):
       return body
 
 
+
 pan = CookingPot()
+
+
+def static_handler(ctx,filename=None,static_dir=None):
+  
+  print filename
+  return 'ok'
+
+def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
+  pan.add_route(url_prefix+"<filename>",target=static_handler, static_dir=static_dir)
+
+
 
 # expose in globals, so we can use @decorator
 route = pan.route

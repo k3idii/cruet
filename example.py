@@ -35,7 +35,7 @@ def handle2(ctx, *args_from_tester):
 @sauce.pan.route('/a/b/c', route_type=sauce.ROUTE_CHECK_STR)
 def handle3(ctx, *a):
   ctx.response.headers['x-test'] = 1
-  return "Handle 3, match /a/b/c"
+  return {'this':'will',"return":"JSON"}
 
 # --------------------------------------------------------------------
 # Generator as route
@@ -53,6 +53,12 @@ def router_generator(ctx):
 
 sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
 # ^--- also can to this using @decorator ;-)
+
+
+# --------------------------------------------------------------------
+# guess what ^_^
+sauce.register_static_file_handler(url_prefix='/static/')
+
 
 
 # --------------------------------------------------------------------
