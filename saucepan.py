@@ -6,11 +6,16 @@ import httplib
 from collections import OrderedDict
 from abc import abstractmethod
 import re
+import time
 import logging
 import json
+import os.path
+
+# is this present on al os ?
+import mimetypes
 
 __author__ = 'KeiDii'
-__version__ = '0.3'
+__version__ = '0.4'
 __license__ = 'MIT'
 
 DEFAULT_LISTEN_HOST = '0.0.0.0'
@@ -24,9 +29,15 @@ HTTP_CODES[431] = "Request Header Fields Too Large"
 
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
 
-
+HEADER_LOCATION = "Location"
 HEADER_CONTENT_LENGTH = 'Content-Length'
 HEADER_CONTENT_TYPE = 'Content-type'
+HEADER_CONTENT_ENCODING = 'Content-encoding'
+HEADER_CONTENT_DISPOSITION = 'Content-disposition'
+HEADER_LAST_MODIFIED = 'Last-modified'
+
+SAVE_AS_TPL = 'attachment; filename="{0:s}"'
+
 CONTENT_JSON = 'application/json'
 CONTENT_HTML = 'text/html'
 
@@ -180,9 +191,6 @@ class HttpRequest(HttpMessage):
       return self.path
 
 
-
-
-
 class HttpResponse(HttpMessage):
   status_code = 200
   status_message = None
@@ -192,6 +200,10 @@ class HttpResponse(HttpMessage):
 
   def __init__(self, version='HTTP/1.1'):
     self.http_version = version
+
+  def status(self, code, message=None):
+    self.status_code = code
+    self.status_message = message
 
   def get_status(self):
     return http_status(self.status_code, self.status_message)
@@ -234,7 +246,7 @@ class AbstractRouter(object):
       self.default(ctx, **kw)
 
   def add_entry(self, testable, **kw):
-    logging.debug("Adding new route [testable=%s] "%str(testable))
+    logging.debug("Adding new route [testable=%s] " % str(testable))
     kw['testable'] = testable
     self._routes.append(self._pre_process(**kw))
     pass
@@ -373,7 +385,7 @@ class DefaultRouter(AbstractRouter):
         else:
           route_type = ROUTE_CHECK_CALL
       kw['route_type'] = route_type
-      logging.debug("Route type after guess: %s"%route_type)
+      logging.debug("Route type after guess: %s" % route_type)
     else:
       # "* Route type already set to :", route_type
       pass
@@ -397,7 +409,7 @@ class DefaultRouter(AbstractRouter):
     if _callable and callable(_callable):
       return _callable(ctx, **args)
     else:
-      log.error("Ouch! problem with _callable !")
+      logging.error("Ouch! problem with _callable !")
 
 
 DEFAULT_HEADERS = {
@@ -405,9 +417,29 @@ DEFAULT_HEADERS = {
   'Server': 'Saucepan (%s)' % __version__,
 }
 
+
+class Http3xx(Exception):
+  def __init__(self, target, code=302):
+    Exception.__init__(self, "HTTP Redirect")
+    self.target = target
+    self.code = code
+
+
+class Http4xx(Exception):
+  def __init__(self, code, info=None):
+    if info is None:
+      info = get_default_http_message(code)
+    if info is None:
+      info = "Error"
+    Exception.__init__(self, "HTTP Error: {0:d} {1:s}".format(code, info))
+    self.code = code
+    self.info = info
+
+
 def _silent_error_handler(ctx, error):
   ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_HTML
   return "500: server fail !"
+
 
 def _verbose_error_handler(ctx, error):
   import traceback
@@ -421,9 +453,22 @@ def _verbose_error_handler(ctx, error):
   ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_HTML
   return body
 
+
+def _http_4xx_handler(obj, ctx, error):
+  ctx.response.status(error.code, error.info)
+  return "{0:d} : {1:s}".format(error.code, error.info)
+
+
+def _http_3xx_handler(obj, ctx, error):
+  ctx.response.status(error.code)
+  ctx.response.headers[HEADER_LOCATION] = error.target
+  return '<a href="{0:s}">Moved : {0:s}</a>'.format(error.target)
+
+
 def _default_request_handler(ctx):
   ctx.response.status_code = 404
   return "Not found!"
+
 
 class CookingPot(object):
   _write_using_writer = False
@@ -431,6 +476,8 @@ class CookingPot(object):
   be_verbose = True
   auto_json = True
   _exception_handlers = []
+  handle_3xx = _http_3xx_handler
+  handle_4xx = _http_4xx_handler
 
   def __init__(self, router_class=None):
     logging.debug("Main object init")
@@ -454,8 +501,7 @@ class CookingPot(object):
     )
 
   def handle_error(self, ctx, error):
-    ctx.response.status_code = 500
-    ctx.response.status_message = "Server Fail"
+    ctx.response.status(500, "Server Fail")
     for entry in self._exception_handlers:
       if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
@@ -481,43 +527,83 @@ class CookingPot(object):
     for k, v in DEFAULT_HEADERS.iteritems():
       ctx.response.headers[k] = v
     try:
-      self.router.select_route(ctx)
-    except Exception as ex:
-      ctx.response.body = self.handle_error(ctx, ex)
-    body = ctx.response.body
-    if self.auto_json:
-      if isinstance(body, dict) or isinstance(body, list):
-        logging.debug('Apply auto JSON')
-        body  = json.dumps(body)
-        ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_JSON
-        ctx.response.body = body
+      # one will say that is insane, but it handle the situation that
+      # exception handler will fail somehow ....
+      try:
+        self.router.select_route(ctx)
+      except Http3xx as ex:
+        ctx.response.body = self.handle_3xx(ctx, ex)
+      except Http4xx as ex:
+        ctx.response.body = self.handle_4xx(ctx, ex)
+      except Exception as ex:
+        ctx.response.body = self.handle_error(ctx, ex)
+
+      # <-- move this to middleware ...
+      if self.auto_json:
+        if isinstance(ctx.response.body, dict) or isinstance(ctx.response.body, list):
+          logging.debug('Apply auto JSON')
+          body = json.dumps(ctx.response.body)
+          ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_JSON
+          ctx.response.body = body
+    except Exception as epic_fail:
+      logging.error("EPIC FAIL" + str(epic_fail))
+      ctx.response.body = "CRITICAL ERROR"
+      ctx.response.status(500)
     ctx.response.finish()
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()
     body_writer = start_response(status, headers, exc_info)
     if self._write_using_writer:
       if callable(body_writer):
-        body_writer(body)
+        body_writer(ctx.response.body)
         return ''
       else:
-        return body
+        return ctx.response.body
     else:
-      return body
-
+      return ctx.response.body
 
 
 pan = CookingPot()
 
 
-def static_handler(ctx,filename=None,static_dir=None):
-  
-  print filename
-  return 'ok'
+def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None, save_as=None, last=True):
+  real_static = os.path.abspath(static_dir)
+  real_path = os.path.abspath(os.path.join(static_dir, filename))
+  logging.debug("Try static file access : {0:s} ".format(real_path))
+  if not real_path.startswith(real_static):
+    raise Http4xx(403, 'No!')
+  if not os.path.exists(real_path):
+    raise Http4xx(404, 'Not found')
+  if not os.path.isfile(real_path):
+    raise Http4xx(404, 'Not found')
+  if not os.access(real_path, os.R_OK):
+    raise Http4xx(403, 'No access')
+  if mime is None:
+    mime, enc = mimetypes.guess_type(real_path)
+    if encoding is None and enc is not None:
+      encoding = enc
+  if encoding:
+    ctx.response.headers[HEADER_CONTENT_ENCODING] = encoding
+
+  if save_as is not None:
+    ctx.response.headers[HEADER_CONTENT_DISPOSITION] = SAVE_AS_TPL.format(save_as)
+  if last:
+    # http://tools.ietf.org/html/rfc2616#section-14.29
+    # http://tools.ietf.org/html/rfc2616#section-3.3
+    fstat = os.stat(real_path)
+    lm_str = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(fstat.st_mtime))
+    ctx.response.headers[HEADER_LAST_MODIFIED] = lm_str
+  # range ?
+  # content-range ?
+  # content-length ?
+  # last-modified +
+  # mime +
+  # HEAD ?
+  return open(real_path, 'r').read()
+
 
 def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
-  pan.add_route(url_prefix+"<filename>",target=static_handler, static_dir=static_dir)
-
-
+  pan.add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
 
 # expose in globals, so we can use @decorator
 route = pan.route
@@ -544,7 +630,9 @@ def run(server_class=None, **opts):
 
 
 if __name__ == '__main__':
-  logging.warn("Running stanalone ?")
+  logging.warn("Running standalone ?")
   run()
 
-# end
+  # end
+  # # TODO:
+  # # add support for middleware (pre-request | post-request)

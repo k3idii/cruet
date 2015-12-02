@@ -59,6 +59,15 @@ sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
 # guess what ^_^
 sauce.register_static_file_handler(url_prefix='/static/')
 
+# --------------------------------------------------------------------
+# can do 302 by raising exception ;-)
+@sauce.pan.route("/redirect")
+def do_302(ctx):
+  raise sauce.Http3xx("/destination")
+
+@sauce.pan.route("/destination")
+def do_dst(ctx):
+  return 'Landed !'
 
 
 # --------------------------------------------------------------------
