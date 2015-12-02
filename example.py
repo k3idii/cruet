@@ -3,6 +3,10 @@ logging.basicConfig(level=logging.DEBUG)
 
 import saucepan as sauce
 
+# <- enable additional processing
+sauce.enable_auto_json()
+sauce.enable_auto_head_handler()
+
 # --------------------------------------------------------------------
 # classic add route (like bottle, converted to regex)
 @sauce.route('/hello/<name>', check_method=["GET","POST"], custom_param="Hello")
@@ -92,6 +96,15 @@ def default_route(ctx):
 def handle_exception1(ctx,err):
   print "Exception handler : ",ctx, err
   return "Exception handled, do not panic !!!"
+
+# --------------------------------------------------------------------
+# register exception handler (like route ^_^)
+@sauce.pan.hook(sauce.HOOK_POST, a=2)
+def post_hook_1(ctx, a):
+  ctx.response.headers['x-hooked'] = a
+
+
+
 
 if __name__ == '__main__':
   sauce.run(host='0.0.0.0', port=12345)

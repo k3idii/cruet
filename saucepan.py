@@ -469,6 +469,9 @@ def _default_request_handler(ctx):
   ctx.response.status_code = 404
   return "Not found!"
 
+HOOK_PRE = 'pre'
+HOOK_POST = 'post'
+POSSIBLE_HOOKS = [HOOK_PRE, HOOK_POST]
 
 class CookingPot(object):
   _write_using_writer = False
@@ -478,12 +481,25 @@ class CookingPot(object):
   _exception_handlers = []
   handle_3xx = _http_3xx_handler
   handle_4xx = _http_4xx_handler
+  pre_hooks = []
+  post_hooks = []
 
   def __init__(self, router_class=None):
     logging.debug("Main object init")
     if router_class:
       self.router = router_class()
     self.router.default = _default_request_handler
+
+  def hook(self, h_type, *a, **kw):
+    if not h_type in POSSIBLE_HOOKS:
+      raise Exception("Invalid hook type! {0:s} not in {1:s}".format(h_type, str(POSSIBLE_HOOKS)))
+    def _wrapper(f):
+      entry = dict(func=f, args=a, kwargs=kw)
+      if h_type == HOOK_PRE:
+        self.pre_hooks.append(entry)
+      elif h_type == HOOK_POST:
+        self.post_hooks.append(entry)
+    return _wrapper
 
   def handle_exception(self, ex_type, **kw):
     def _wrapper(f):
@@ -493,11 +509,7 @@ class CookingPot(object):
 
   def add_exception_handler(self, ex_type, fn, **kw):
     self._exception_handlers.append(
-      dict(
-        ex_type=ex_type,
-        handler=fn,
-        kwargs=kw,
-      )
+      dict(ex_type=ex_type, handler=fn, kwargs=kw)
     )
 
   def handle_error(self, ctx, error):
@@ -512,7 +524,6 @@ class CookingPot(object):
 
   def route(self, testable, **kw):
     def _wrapper(f):
-      # print " ** wrapped : ", f, " ** "
       self.add_route(testable, target=f, **kw)
 
     return _wrapper
@@ -526,9 +537,15 @@ class CookingPot(object):
     ctx = TheContext(environ)
     for k, v in DEFAULT_HEADERS.iteritems():
       ctx.response.headers[k] = v
+
     try:
       # one will say that is insane, but it handle the situation that
       # exception handler will fail somehow ....
+      for _h in self.pre_hooks:
+        if callable(_h['func']):
+          logging.debug("Calling PRE hook : {0:s}".format(str(_h)))
+          _h['func'](ctx,*_h['args'],**_h['kwargs'])
+
       try:
         self.router.select_route(ctx)
       except Http3xx as ex:
@@ -538,15 +555,14 @@ class CookingPot(object):
       except Exception as ex:
         ctx.response.body = self.handle_error(ctx, ex)
 
-      # <-- move this to middleware ...
-      if self.auto_json:
-        if isinstance(ctx.response.body, dict) or isinstance(ctx.response.body, list):
-          logging.debug('Apply auto JSON')
-          body = json.dumps(ctx.response.body)
-          ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_JSON
-          ctx.response.body = body
+      for _h in self.post_hooks:
+        if callable(_h['func']):
+          logging.debug("Calling POST hook : {0:s}".format(str(_h)))
+          _h['func'](ctx,*_h['args'],**_h['kwargs'])
+
+
     except Exception as epic_fail:
-      logging.error("EPIC FAIL" + str(epic_fail))
+      logging.error("EPIC FAIL : " + str(epic_fail))
       ctx.response.body = "CRITICAL ERROR"
       ctx.response.status(500)
     ctx.response.finish()
@@ -565,6 +581,35 @@ class CookingPot(object):
 
 pan = CookingPot()
 
+def enable_auto_json():
+  # <-- move this to "extension package?"
+  # Why? not everybody need that ! It cause
+  @pan.hook(HOOK_PRE)
+  def _auto_json_pre(ctx):
+    ctx.do_auto_json = True
+
+  @pan.hook(HOOK_POST)
+  def _auto_json_post(ctx):
+    if not ctx.do_auto_json:
+      return
+    if isinstance(ctx.response.body, dict) or isinstance(ctx.response.body, list):
+      logging.debug('Apply auto JSON (in hook)')
+      body = json.dumps(ctx.response.body)
+      ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_JSON
+      ctx.response.body = body
+
+def enable_auto_head_handler():
+  @pan.hook(HOOK_POST)
+  def _handle_head(ctx):
+    if not ctx.request.verb == 'HEAD':
+      return
+    ctx.response.fix_content_length = False
+    ctx.response.headers[HEADER_CONTENT_LENGTH] = len(ctx.response.body)
+    ctx.response.body = ''
+
+def enable_auto_range_handler():  # <- do we need this ?
+  pass
+
 
 def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None, save_as=None, last=True):
   real_static = os.path.abspath(static_dir)
@@ -578,13 +623,14 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
     raise Http4xx(404, 'Not found')
   if not os.access(real_path, os.R_OK):
     raise Http4xx(403, 'No access')
+  if hasattr(ctx,'do_auto_json'):
+    ctx.do_auto_json = False # <- skip processing
   if mime is None:
     mime, enc = mimetypes.guess_type(real_path)
     if encoding is None and enc is not None:
       encoding = enc
   if encoding:
     ctx.response.headers[HEADER_CONTENT_ENCODING] = encoding
-
   if save_as is not None:
     ctx.response.headers[HEADER_CONTENT_DISPOSITION] = SAVE_AS_TPL.format(save_as)
   if last:
@@ -593,6 +639,7 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
     fstat = os.stat(real_path)
     lm_str = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(fstat.st_mtime))
     ctx.response.headers[HEADER_LAST_MODIFIED] = lm_str
+  # TODO :
   # range ?
   # content-range ?
   # content-length ?
@@ -604,6 +651,8 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
 
 def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
   pan.add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
+
+
 
 # expose in globals, so we can use @decorator
 route = pan.route
