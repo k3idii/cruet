@@ -645,7 +645,7 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
   # content-length ?
   # last-modified +
   # mime +
-  # HEAD ?
+  # HEAD ? <- not here !
   return open(real_path, 'r').read()
 
 
