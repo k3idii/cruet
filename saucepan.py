@@ -31,11 +31,14 @@ HEADER_CONTENT_ENCODING = 'Content-encoding'
 HEADER_CONTENT_DISPOSITION = 'Content-disposition'
 HEADER_LAST_MODIFIED = 'Last-modified'
 HEADER_SERVER = 'Server'
+HEADER_RANGE = 'Range'
+
 
 SAVE_AS_TPL = 'attachment; filename="{0:s}"'
 
 CONTENT_JSON = 'application/json'
 CONTENT_HTML = 'text/html'
+CONTENT_PLAIN = 'text/plain'
 
 DEFAULT_HEADERS = {
   HEADER_CONTENT_TYPE: CONTENT_HTML,
@@ -65,7 +68,7 @@ def http_status(code, message=None):
         message = 'http' # any better ideas ?
   return "{0} {1}".format(code, message)
 
-# usefull stuff
+# useful stuff
 
 def _regex_get_args_kwargs(exp, mo):
   idx = exp.groupindex.values()
@@ -78,17 +81,24 @@ def _regex_get_args_kwargs(exp, mo):
   return args, kwargs
 
 def _parse_range(value):
-  if not 'bytes=' in value:
+  # http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.12
+  # The only range unit defined by HTTP/1.1 is "bytes".
+  RANGE_BYTES = 'bytes='
+  if not RANGE_BYTES in value:
     return
-  _, value = value.split('bytes=',1)
+  _, value = value.split(RANGE_BYTES,1)
   r = []
   for rng in value.split(","):
     if '-' not in rng:
       continue
     print rng
     a,b = rng.split('-')
-    # parse a,b 
-    r.append( (1,2) )
+    if a == '':
+      r.append([-1,int(b)])
+    elif b == '':
+      r.append([int(a),-1])
+    else:
+      r.append([int(a),int(b)])
   return r
 
 
@@ -244,7 +254,7 @@ class HttpResponse(HttpMessage):
   status_message = None
   headers = LastUpdatedOrderedDict()
   fix_content_length = True
-  # http_version = '' <- will not be userd ?
+  # http_version = '' <- will not be used ?
 
   def __init__(self): # , version='HTTP/1.1'):
     # self.http_version = version
@@ -342,7 +352,8 @@ METHOD_POST = ['POST']
 def _default_router_do_call(ctx, fn, a, kw):
   data = fn(ctx, *a, **kw)
   if data:
-    ctx.response.body = data
+    ctx.response.body += data
+    #                 ^- append, NOT replace !
 
 # one can implement other router-type class, this provide
 # basic, but complex functionality
@@ -647,6 +658,35 @@ class CookingPot(object):
 
 pan = CookingPot()
 
+# utils:
+class MultipartElement(object):
+  def __init__(self, content, fields=None):
+    self.content = content
+    self.fields = fields if fields else {}
+
+
+def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
+  if marker is None:
+    marker = 'ThisIsBoundaryMarkerXXD'
+  if fields is None:
+    fields = {}
+  body = ''
+  for element in parts:
+    if not isinstance(element, MultipartElement):
+      continue
+    body += '--' + marker + '\n'
+    merged = fields.copy()
+    merged.update(element.fields)
+    for k,v  in merged.iteritems():
+      body += '{0:s}: {1:s}'.format(k,v)
+    body += '\n'
+    body += element.content + '\n'
+  body += '--' + marker + '--\n'
+  ctx.response.headers[HEADER_CONTENT_TYPE] = 'multipart/{0:s}; boundary={1:s}'.format(mp_type, marker)
+  ctx.response.body = body
+
+
+
 # plugin-like hooks,
 # disabled by default to allow faster processing ...
 
@@ -678,7 +718,22 @@ def enable_auto_head_handler():
     ctx.response.body = ''
 
 def enable_auto_range_handler():  # <- do we need this ?
-  pass
+  @pan.hook(HOOK_PRE)
+  def _handle_range_pre(ctx):
+    ctx.do_range = True
+
+  @pan.hook(HOOK_POST)
+  def _handle_range_post(ctx):
+    if not ctx.do_range:
+      return
+    rng = ctx.request.headres.get(HEADER_RANGE)
+    if not rng:
+      return
+
+
+
+
+
 
 
 def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None, save_as=None, last=True):

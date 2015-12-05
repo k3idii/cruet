@@ -64,6 +64,15 @@ sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
 sauce.register_static_file_handler(url_prefix='/static/')
 
 # --------------------------------------------------------------------
+# multipart answer >
+@sauce.pan.route("/multipart")
+def do_multipart(ctx):
+  parts = []
+  parts.append(sauce.MultipartElement('test123'))
+  parts.append(sauce.MultipartElement('test123'))
+  return sauce.make_multipart(ctx,parts)
+
+# --------------------------------------------------------------------
 # can do 302 by raising exception ;-)
 @sauce.pan.route("/redirect")
 def do_302(ctx):
