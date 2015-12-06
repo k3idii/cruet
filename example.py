@@ -93,11 +93,19 @@ def crash_it(ctx):
 
 
 # --------------------------------------------------------------------
+# file upload demo
+@sauce.pan.route("/upload")
+def default_route(ctx):
+  print ctx.request.headers._env
+  return "OK"
+
+
+
+# --------------------------------------------------------------------
 # default route (none == always match)
 @sauce.pan.route(None)
 def default_route(ctx):
   return "Hello. This is default handler !"
-
 
 # --------------------------------------------------------------------
 # register exception handler (like route ^_^)

@@ -9,6 +9,7 @@ import re
 import time
 import logging
 import json
+import os
 import os.path
 
 # is this present on al os ?
@@ -42,7 +43,7 @@ CONTENT_PLAIN = 'text/plain'
 
 DEFAULT_HEADERS = {
   HEADER_CONTENT_TYPE: CONTENT_HTML,
-  HEADER_SERVER : 'Saucepan (%s)' % __version__,
+  HEADER_SERVER : 'Saucepan ({0:s})'.format(__version__),
 }
 
 
@@ -53,6 +54,14 @@ HTTP_CODES[429] = "Too Many Requests"
 HTTP_CODES[431] = "Request Header Fields Too Large"
 
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
+
+
+def get_random_string(size, encode='hex', factor=2):
+  if encode:
+    return os.urandom(1+size/factor).encode(encode)[:size]
+  else:
+    return os.urandom(size)
+
 
 def get_default_http_message(code):
   c = int(code) / 100
@@ -233,12 +242,14 @@ class HttpRequest(HttpMessage):
   #_http_version = None
 
   def __init__(self, env):
+    self.env = env
     self.headers = CaseInsensitiveHttpEnv(env)
     self.verb = env.get('REQUEST_METHOD')
     self.method = self.verb # You call it verb, I call it method
     self.protocol = env.get('SERVER_PROTOCOL')
     self.path = env.get('PATH_INFO')
     self.host = env.get('HTTP_HOST')
+    self.wsgi_input = env.get('wsgi.input') # wsgi.file_wrapper ?
     # self._http_proto, self._http_version = self.version.split('/')
     # ^- anyone needs that soo often ?
 
@@ -312,7 +323,7 @@ class AbstractRouter(object):
       self.default(ctx, **kw)
 
   def add_entry(self, testable, **kw):
-    logging.debug("Adding new route [testable=%s] " % str(testable))
+    logging.debug("Adding new route [testable={0:s}] ".format(str(testable)))
     kw['testable'] = testable
     self._routes.append(self._pre_process(**kw))
     pass
@@ -456,7 +467,7 @@ class DefaultRouter(AbstractRouter):
         else:
           route_type = ROUTE_CHECK_CALL
       kw['route_type'] = route_type
-      logging.debug("Route type after guess: %s" % route_type)
+      logging.debug("Route type after guess: {0:d}".format(route_type))
     else:
       # "* Route type already set to :", route_type
       pass
@@ -667,7 +678,7 @@ class MultipartElement(object):
 
 def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
   if marker is None:
-    marker = 'ThisIsBoundaryMarkerXXD'
+    marker = 'MARK' + get_random_string(20)
   if fields is None:
     fields = {}
   body = ''
@@ -729,6 +740,10 @@ def enable_auto_range_handler():  # <- do we need this ?
     rng = ctx.request.headres.get(HEADER_RANGE)
     if not rng:
       return
+    #TODO:
+    # * build response based on ranges
+    # * use multipart if needed !
+
 
 
 
@@ -765,13 +780,10 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
     lm_str = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(f_stat.st_mtime))
     ctx.response.headers[HEADER_LAST_MODIFIED] = lm_str
 
-
   # TODO :
   # range ?
   # content-range ?
   # content-length ?
-  # last-modified +
-  # mime +
   return open(real_path, 'r').read()
 
 
