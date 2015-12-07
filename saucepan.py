@@ -11,6 +11,7 @@ import logging
 import json
 import os
 import os.path
+import io
 
 # is this present on al os ?
 import mimetypes
@@ -22,6 +23,8 @@ __license__ = 'MIT'
 DEFAULT_LISTEN_HOST = '0.0.0.0'
 DEFAULT_LISTEN_PORT = 8008
 
+MAX_CONTENT_SIZE = 1 * 1024 * 1024 # 1 MB
+
 # const strings :
 
 # common header names :
@@ -30,10 +33,10 @@ HEADER_CONTENT_LENGTH = 'Content-Length'
 HEADER_CONTENT_TYPE = 'Content-type'
 HEADER_CONTENT_ENCODING = 'Content-encoding'
 HEADER_CONTENT_DISPOSITION = 'Content-disposition'
+HEADER_CONTENT_RANGE = 'Content-Range'
 HEADER_LAST_MODIFIED = 'Last-modified'
 HEADER_SERVER = 'Server'
 HEADER_RANGE = 'Range'
-
 
 SAVE_AS_TPL = 'attachment; filename="{0:s}"'
 
@@ -43,9 +46,8 @@ CONTENT_PLAIN = 'text/plain'
 
 DEFAULT_HEADERS = {
   HEADER_CONTENT_TYPE: CONTENT_HTML,
-  HEADER_SERVER : 'Saucepan ({0:s})'.format(__version__),
+  HEADER_SERVER: 'Saucepan ({0:s})'.format(__version__),
 }
-
 
 HTTP_CODES = httplib.responses.copy()
 HTTP_CODES[418] = "I'm a teapot"  # RFC 2324
@@ -56,9 +58,13 @@ HTTP_CODES[431] = "Request Header Fields Too Large"
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
 
 
+class HttpProtocolError(Exception):  # raise on http-spec violation
+  pass
+
+
 def get_random_string(size, encode='hex', factor=2):
   if encode:
-    return os.urandom(1+size/factor).encode(encode)[:size]
+    return os.urandom(1 + size / factor).encode(encode)[:size]
   else:
     return os.urandom(size)
 
@@ -67,17 +73,38 @@ def get_default_http_message(code):
   c = int(code) / 100
   return HTTP_CODE_RANGES.get(c, None)
 
+
 def http_status(code, message=None):
   code = int(code)
+  print "HTTP STATUS CALL !",code,message
   if message is None:
     message = HTTP_CODES.get(code, None)
     if message is None:
       message = get_default_http_message(code)
       if message is None:
-        message = 'http' # any better ideas ?
+        message = 'http'  # any better ideas ?
   return "{0} {1}".format(code, message)
 
+
 # useful stuff
+
+def _read_iter_blocks(read_fn, size, block_size=2048):
+  while True:
+    if block_size > size:
+      block_size = size
+    block = read_fn(block_size)
+    if not block or len(block) == 0:
+      return
+    yield block
+    size -= len(block)
+    if size <= 0:
+      return
+
+def _read_iter_chunked(read_fn, size):
+  while True:
+    return False
+  # TODO : implement me !
+
 
 def _regex_get_args_kwargs(exp, mo):
   idx = exp.groupindex.values()
@@ -89,29 +116,53 @@ def _regex_get_args_kwargs(exp, mo):
       args.append(groups[i])
   return args, kwargs
 
-def _parse_range(value):
+def _tokenize_query_str(s, probe=True, eq_char='=', sep_char='&'):
+  if probe:
+    tmp = s[:100]
+    if eq_char in tmp or sep_char in tmp:
+      pass # ok !
+    else:
+      return # None
+  for chunk in s.split(sep_char):
+    if eq_char in chunk:
+      yield chunk.split(eq_char,1)
+    else:
+      yield [chunk, None]
+
+
+
+def _parse_range(value, max_len=-1):
   # http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.12
   # The only range unit defined by HTTP/1.1 is "bytes".
-  RANGE_BYTES = 'bytes='
-  if not RANGE_BYTES in value:
-    return
-  _, value = value.split(RANGE_BYTES,1)
+  range_str_bytes = 'bytes='
+  if range_str_bytes not in value:
+    raise Exception("Invalid 'range' header syntax !")
+  _, value = value.split(range_str_bytes, 1)
   r = []
   for rng in value.split(","):
     if '-' not in rng:
-      continue
-    print rng
-    a,b = rng.split('-')
+      raise HttpProtocolError("Invalid 'range' header syntax!")
+    a, b = rng.split('-')
+    if a == '' and b == '':
+      raise HttpProtocolError("Invalid 'range' header syntax!")
     if a == '':
-      r.append([-1,int(b)])
-    elif b == '':
-      r.append([int(a),-1])
+      a = 0
     else:
-      r.append([int(a),int(b)])
+      a = int(a)
+    if b == '':
+      b = max_len
+    else:
+      b = int(b)
+    if max_len > 0:
+      if a > max_len:
+        a = max_len
+      if b > max_len:
+        b = max_len
+    if b > 0:  # handle -1 as unknown 'end' of data
+      if a > b:
+        raise HttpProtocolError("Invalid 'range' header syntax !")
+    r.append([a, b])
   return r
-
-
-
 
 
 #
@@ -162,19 +213,16 @@ class WSGIRefServer(GenericServer):
     except KeyboardInterrupt:
       self.server.server_close()
 
+
 #
 # -------------- HTTP STUFF  -----
 #
-
-
 
 class LastUpdatedOrderedDict(OrderedDict):
   def __setitem__(self, key, value, dict_setitem=dict.__setitem__):
     if key in self:
       del self[key]
     OrderedDict.__setitem__(self, key, value, dict_setitem=dict_setitem)
-
-
 
 
 class CaseInsensitiveHttpEnv(object):
@@ -201,10 +249,12 @@ class CaseInsensitiveHttpEnv(object):
       # well, user knows _really_ good what he needs
       # else: we need help him a little
       pass
-    elif item == 'METHOD': # special metadata #1
-      item = 'REQUEST_METHOD'
-    elif item == 'PROTOCOL': # special metadata #2
-      item = 'SERVER_PROTOCOL'
+    if item in self._extra_keys: # let them pass ;-)
+      pass
+    #elif item == 'METHOD':  # special metadata #1
+    #  item = 'REQUEST_METHOD'
+    #elif item == 'PROTOCOL':  # special metadata #2
+    #  item = 'SERVER_PROTOCOL'
     else:
       item = "HTTP_" + item
     val = self._env.get(item, None)
@@ -227,31 +277,76 @@ class CaseInsensitiveHttpEnv(object):
     return cur_val == val
 
 
-class HttpMessage(object): # meta-object
+class HttpMessage(object):  # meta-object
   body = ''
 
 
 class HttpRequest(HttpMessage):
-  headers = {}
-  verb = None
-  method = None
-  protocol = None
-
-  #version = None
-  #_http_proto = None
-  #_http_version = None
+  files = {}
+  post_vars = {}
+  get_vars = {}
 
   def __init__(self, env):
     self.env = env
+    #for k,v in env.iteritems():
+    #  print k,' = ',v
     self.headers = CaseInsensitiveHttpEnv(env)
     self.verb = env.get('REQUEST_METHOD')
-    self.method = self.verb # You call it verb, I call it method
+    self.method = self.verb  # You call it verb, I call it method
     self.protocol = env.get('SERVER_PROTOCOL')
     self.path = env.get('PATH_INFO')
     self.host = env.get('HTTP_HOST')
-    self.wsgi_input = env.get('wsgi.input') # wsgi.file_wrapper ?
-    # self._http_proto, self._http_version = self.version.split('/')
-    # ^- anyone needs that soo often ?
+    self.query_string = env.get('QUERY_STRING')
+    self.content_type = env.get('CONTENT_TYPE')
+    self.wsgi_input = env.get('wsgi.input')
+    self.is_chunked = False
+    enc = self.headers.get('TRANSFER_ENCODING','').lower()
+    if 'chunk' in enc:
+      self.is_chunked = True
+    l = env.get('CONTENT_LENGTH','')
+    if len(l) < 1:
+      self.content_length = 0
+    else:
+      self.content_length = int(l)
+    self.body = io.BytesIO()
+
+  def parse(self):
+    if self.content_length > MAX_CONTENT_SIZE: # declared size too large ...
+      raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
+      # do not event bother ;-)
+    if self.content_length > 0:
+      try: # re-parse body, fill BytesIO ;-)
+        fn = _read_iter_chunked if self.is_chunked else _read_iter_blocks
+        for block in fn(self.wsgi_input.read, self.content_length):
+          self.body.write(block)
+        self.body.seek(0)
+      except:
+        pass # TODO : crash ? or keep silent ?
+    for k,v in _tokenize_query_str(self.query_string, probe=False):
+      print "GET ",k," = ",v
+      self.get_vars[k] = v
+    if 'multipart/' not in self.content_type: # or check for application/x-www-form-urlencoded ?
+      # split data from body into POST vars
+      for k,v in _tokenize_query_str(self.get_body()):
+        print "POST ",k," = ",v
+        self.post_vars[k] = v
+    else: # handle multipart POST data
+      pass
+
+  def get_body(self):
+    if self.content_length < 0:
+      self.content_length = MAX_CONTENT_SIZE
+    self.body.seek(0)
+    return self.body.read(self.content_length)
+
+  def post(self, key, default=None, required=False):
+    pass
+
+  def get(self, key, default=None, required=False):
+    pass
+
+  def arg(self, key, default=None, required=False):
+    pass
 
   def uri(self, host=False):
     if host:
@@ -267,7 +362,7 @@ class HttpResponse(HttpMessage):
   fix_content_length = True
   # http_version = '' <- will not be used ?
 
-  def __init__(self): # , version='HTTP/1.1'):
+  def __init__(self):  # , version='HTTP/1.1'):
     # self.http_version = version
     pass
 
@@ -293,16 +388,13 @@ class HttpResponse(HttpMessage):
 class TheContext(object):
   def __init__(self, env):
     self.request = HttpRequest(env)
-    self.response = HttpResponse() # version=self.request.version)
+    self.response = HttpResponse()  # version=self.request.version)
     self.env = env
 
 
 #
 # -------------- ROUTER  -----
 #
-
-
-
 
 class AbstractRouter(object):
   _routes = []
@@ -355,6 +447,7 @@ ROUTE_CHECK_REGEX = 3
 ROUTE_CHECK_CALL = 4
 ROUTE_GENERATOR = 5
 DEFAULT_ROUTE_TYPE = ROUTE_CHECK_SIMPLE
+ROUTE_ALWAYS = None  # <- special 'testble' value
 
 METHOD_GET = ['GET']
 METHOD_POST = ['POST']
@@ -363,8 +456,14 @@ METHOD_POST = ['POST']
 def _default_router_do_call(ctx, fn, a, kw):
   data = fn(ctx, *a, **kw)
   if data:
-    ctx.response.body += data
-    #                 ^- append, NOT replace !
+    if ctx.response.body:
+      ctx.response.body += data
+      #                 ^- append, NOT replace !
+      # this would raise exception, if resp.body is already set,
+      # and called function return incompatible type (ex. str + dict )
+    else:
+      ctx.response.body = data  # <- this should work if we return dict,
+
 
 # one can implement other router-type class, this provide
 # basic, but complex functionality
@@ -386,29 +485,32 @@ class DefaultRouter(AbstractRouter):
       ROUTE_GENERATOR: self._test_generator,
     }
 
-  def _test_always(self, ctx, testable=None, target=None, **kw):
+  @staticmethod
+  def _test_always(ctx, testable=None, target=None, **kw):
     _default_router_do_call(ctx, target, [], kw)
     return True
 
-  def _test_str(self, ctx, testable='', target=None, **ex):
+  @staticmethod
+  def _test_str(ctx, testable='', target=None, **ex):
     uri = ctx.request.uri()
     if uri == testable:
       _default_router_do_call(ctx, target, [], ex)
       return True
     return False
 
-  def _test_re(self, ctx, testable=None, target=None, _re=None, **ex):
+  @staticmethod
+  def _test_re(ctx, testable=None, target=None, _re=None, **ex):
     uri = ctx.request.uri()
     mo = _re.match(uri)
     if not mo:
       return False
     args, kwargs = _regex_get_args_kwargs(_re, mo)
-    # print " --> ", args, kwargs
     ex.update(kwargs)
     _default_router_do_call(ctx, target, args, ex)
     return True
 
-  def _test_call(self, ctx, testable=None, target=None, **ex):
+  @staticmethod
+  def _test_call(ctx, testable=None, target=None, **ex):
     ret_val = testable(ctx, **ex)
     args = []
     if isinstance(ret_val, tuple) or isinstance(ret_val, list):
@@ -421,7 +523,8 @@ class DefaultRouter(AbstractRouter):
       return True
     return False
 
-  def _test_generator(self, ctx, testable=None, target=None, **ex):
+  @staticmethod
+  def _test_generator(ctx, testable=None, target=None, **ex):
     ret_val = testable(ctx, **ex)
     if ret_val is None:
       return False
@@ -433,6 +536,9 @@ class DefaultRouter(AbstractRouter):
       func = ret_val
     _default_router_do_call(ctx, func, args, route)
     return True
+
+  def add_entry(self, testable=ROUTE_ALWAYS, **kw):  # add default testable value
+    AbstractRouter.add_entry(self, testable, **kw)
 
   def _pre_process(self, **kw):
     # TODO : this could return object with proper methods/values/etc
@@ -454,7 +560,7 @@ class DefaultRouter(AbstractRouter):
 
     if route_type == ROUTE_CHECK_UNDEF:
       logging.debug("Route type is not set. Guessing ...")
-      if testable is None:
+      if testable is ROUTE_ALWAYS:
         route_type = ROUTE_CHECK_ALWAYS
       elif isinstance(testable, basestring):
         if "<" in testable:
@@ -483,7 +589,6 @@ class DefaultRouter(AbstractRouter):
     return kw
 
   def try_route(self, ctx, _callable=None, headers=None, route_type=None, **args):
-    # print 'Trying ... ', args
     if headers and len(headers) > 0:
       for key, val in headers:
         if not ctx.request.headers.check(key, val):
@@ -494,7 +599,6 @@ class DefaultRouter(AbstractRouter):
       logging.error("Ouch! problem with _callable !")
 
 
-
 # 3xx and 4xx "exceptions",
 # use them to stop function execution and return proper http answer
 
@@ -503,7 +607,7 @@ class DefaultRouter(AbstractRouter):
 # not only 3xx and 4xx
 
 class Http3xx(Exception):
-  def __init__(self, target, code=302):
+  def __init__(self, target, code=httplib.MOVED_PERMANENTLY):
     Exception.__init__(self, "HTTP Redirect")
     self.target = target
     self.code = code
@@ -519,14 +623,15 @@ class Http4xx(Exception):
     self.code = code
     self.info = info
 
+
 # 3xx and 4xx handlers
 
-def _http_4xx_handler(obj, ctx, error):
+def _http_4xx_handler(_, ctx, error):
   ctx.response.status(error.code, error.info)
   return "{0:d} : {1:s}".format(error.code, error.info)
 
 
-def _http_3xx_handler(obj, ctx, error):
+def _http_3xx_handler(_, ctx, error):
   ctx.response.status(error.code)
   ctx.response.headers[HEADER_LOCATION] = error.target
   return '<a href="{0:s}">Moved : {0:s}</a>'.format(error.target)
@@ -534,11 +639,12 @@ def _http_3xx_handler(obj, ctx, error):
 
 # Exception handlers :
 
-def _silent_error_handler(ctx, error):
+def _silent_error_handler(ctx, _):
   ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_HTML
   return "500: server fail !"
 
-def _verbose_error_handler(ctx, error):
+
+def _verbose_error_handler(ctx, _):
   import traceback
   import sys
 
@@ -555,9 +661,11 @@ def _default_request_handler(ctx):
   ctx.response.status_code = 404
   return "Not found!"
 
+
 HOOK_PRE = 'pre'
 HOOK_POST = 'post'
 POSSIBLE_HOOKS = [HOOK_PRE, HOOK_POST]
+
 
 class CookingPot(object):
   """
@@ -580,14 +688,16 @@ class CookingPot(object):
     self.router.default = _default_request_handler
 
   def hook(self, h_type, *a, **kw):
-    if not h_type in POSSIBLE_HOOKS:
+    if h_type not in POSSIBLE_HOOKS:
       raise Exception("Invalid hook type! {0:s} not in {1:s}".format(h_type, str(POSSIBLE_HOOKS)))
+
     def _wrapper(f):
       entry = dict(func=f, args=a, kwargs=kw)
       if h_type == HOOK_PRE:
         self.pre_hooks.append(entry)
       elif h_type == HOOK_POST:
         self.post_hooks.append(entry)
+
     return _wrapper
 
   def handle_exception(self, ex_type, **kw):
@@ -611,7 +721,7 @@ class CookingPot(object):
     self.router.add_entry(testable, target=target, **kw)
 
   def _handle_error(self, ctx, error):
-    ctx.response.status(500, "Server Fail")
+    ctx.response.status(httplib.INTERNAL_SERVER_ERROR)  # 500
     for entry in self._exception_handlers:
       if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
@@ -620,40 +730,37 @@ class CookingPot(object):
     else:
       return _silent_error_handler(ctx, error)
 
-
   def wsgi_handler(self, environ, start_response):
     logging.debug('WSGI handler called ...')
     exc_info = None
     ctx = TheContext(environ)
     for k, v in DEFAULT_HEADERS.iteritems():
       ctx.response.headers[k] = v
-
     try:
       # one will say that is insane, but it handle the situation that
       # exception handler will fail somehow ....
-      for _h in self.pre_hooks:
-        if callable(_h['func']):
-          logging.debug("Calling PRE hook : {0:s}".format(str(_h)))
-          _h['func'](ctx,*_h['args'],**_h['kwargs'])
-
       try:
+        ctx.request.parse()
+        for _h in self.pre_hooks:
+          if callable(_h['func']):
+            logging.debug("Calling PRE hook : {0:s}".format(str(_h)))
+            _h['func'](ctx, *_h['args'], **_h['kwargs'])
         self.router.select_route(ctx)
+        for _h in self.post_hooks:
+          if callable(_h['func']):
+            logging.debug("Calling POST hook : {0:s}".format(str(_h)))
+            _h['func'](ctx, *_h['args'], **_h['kwargs'])
+
       except Http3xx as ex:
         ctx.response.body = self.handle_3xx(ctx, ex)
       except Http4xx as ex:
         ctx.response.body = self.handle_4xx(ctx, ex)
       except Exception as ex:
         ctx.response.body = self._handle_error(ctx, ex)
-
-      for _h in self.post_hooks:
-        if callable(_h['func']):
-          logging.debug("Calling POST hook : {0:s}".format(str(_h)))
-          _h['func'](ctx,*_h['args'],**_h['kwargs'])
-
     except Exception as epic_fail:
       logging.error("EPIC FAIL : " + str(epic_fail))
       ctx.response.body = "CRITICAL ERROR"
-      ctx.response.status(500)
+      ctx.response.status(httplib.INTERNAL_SERVER_ERROR)  # 500
     ctx.response.finish()
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()
@@ -667,9 +774,12 @@ class CookingPot(object):
     else:
       return ctx.response.body
 
+
 pan = CookingPot()
 
 # utils:
+
+
 class MultipartElement(object):
   def __init__(self, content, fields=None):
     self.content = content
@@ -688,14 +798,13 @@ def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
     body += '--' + marker + '\n'
     merged = fields.copy()
     merged.update(element.fields)
-    for k,v  in merged.iteritems():
-      body += '{0:s}: {1:s}'.format(k,v)
+    for k, v in merged.iteritems():
+      body += '{0:s}: {1:s}'.format(k, v)
     body += '\n'
     body += element.content + '\n'
   body += '--' + marker + '--\n'
   ctx.response.headers[HEADER_CONTENT_TYPE] = 'multipart/{0:s}; boundary={1:s}'.format(mp_type, marker)
   ctx.response.body = body
-
 
 
 # plugin-like hooks,
@@ -719,6 +828,7 @@ def enable_auto_json():
       ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_JSON
       ctx.response.body = body
 
+
 def enable_auto_head_handler():
   @pan.hook(HOOK_POST)
   def _handle_head(ctx):
@@ -727,6 +837,7 @@ def enable_auto_head_handler():
     ctx.response.fix_content_length = False
     ctx.response.headers[HEADER_CONTENT_LENGTH] = len(ctx.response.body)
     ctx.response.body = ''
+
 
 def enable_auto_range_handler():  # <- do we need this ?
   @pan.hook(HOOK_PRE)
@@ -737,18 +848,24 @@ def enable_auto_range_handler():  # <- do we need this ?
   def _handle_range_post(ctx):
     if not ctx.do_range:
       return
-    rng = ctx.request.headres.get(HEADER_RANGE)
-    if not rng:
+    header_value = ctx.request.headers.get(HEADER_RANGE)
+    if not header_value or len(header_value) == 0:
       return
-    #TODO:
-    # * build response based on ranges
-    # * use multipart if needed !
-
-
-
-
-
-
+    org_size = len(ctx.response.body)
+    ranges = _parse_range(header_value, max_len=org_size)
+    if not header_value or len(header_value) == 0:
+      return
+    ctx.response.status(httplib.PARTIAL_CONTENT)  # 206, avoid magic constant ;-)
+    if len(ranges) == 1:
+      a, b = ranges[0]
+      ctx.response.body = ctx.response.body[a:b]
+      ctx.response.headers[HEADER_CONTENT_RANGE] = 'bytes {0}-{1}/{2}'.format(a, b, org_size)
+      return
+    # else len > 1
+    parts = []
+    for ab in ranges:  # overlapping ranges ? we do not care ;-)
+      parts.append(MultipartElement(ctx.response.body[ab[0]:ab[1]]))
+    make_multipart(ctx, parts, 'byteranges')
 
 
 def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None, save_as=None, last=True):
@@ -756,15 +873,15 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
   real_path = os.path.abspath(os.path.join(static_dir, filename))
   logging.debug("Try static file access : {0:s} ".format(real_path))
   if not real_path.startswith(real_static):
-    raise Http4xx(403)
+    raise Http4xx(httplib.FORBIDDEN)  # 403
   if not os.path.exists(real_path):
-    raise Http4xx(404)
+    raise Http4xx(httplib.NOT_FOUND)  # 404
   if not os.path.isfile(real_path):
-    raise Http4xx(404)
+    raise Http4xx(httplib.NOT_FOUND)  # 404
   if not os.access(real_path, os.R_OK):
-    raise Http4xx(403)
-  if hasattr(ctx,'do_auto_json'):
-    ctx.do_auto_json = False # <- skip processing
+    raise Http4xx(httplib.FORBIDDEN)  # 403
+  if hasattr(ctx, 'do_auto_json'):
+    ctx.do_auto_json = False  # <- skip processing
   if mime is None:
     mime, enc = mimetypes.guess_type(real_path)
     if encoding is None and enc is not None:
@@ -789,8 +906,6 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
 
 def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
   pan.add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
-
-
 
 # expose in globals, so we can use @decorator
 route = pan.route
