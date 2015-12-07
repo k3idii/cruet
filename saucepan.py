@@ -301,7 +301,7 @@ class HttpRequest(HttpMessage):
     self.wsgi_input = env.get('wsgi.input')
     self.is_chunked = False
     enc = self.headers.get('TRANSFER_ENCODING','').lower()
-    if 'chunk' in enc:
+    if 'chunk' in enc: # well, it is so pro ;-)
       self.is_chunked = True
     l = env.get('CONTENT_LENGTH','')
     if len(l) < 1:
@@ -310,7 +310,7 @@ class HttpRequest(HttpMessage):
       self.content_length = int(l)
     self.body = io.BytesIO()
 
-  def parse(self):
+  def parse(self): # parse body, post, get, files and cookies.
     if self.content_length > MAX_CONTENT_SIZE: # declared size too large ...
       raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
       # do not event bother ;-)
@@ -332,6 +332,11 @@ class HttpRequest(HttpMessage):
         self.post_vars[k] = v
     else: # handle multipart POST data
       pass
+    # notes to myself :
+    #  - try to keep all data in body (especially large blobs)
+    #    by storing offset to variables in FILES array (access wrappers ?)
+    #
+
 
   def get_body(self):
     if self.content_length < 0:
