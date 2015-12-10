@@ -13,6 +13,9 @@ import os
 import os.path
 import io
 
+from Cookie import SimpleCookie as CookiesDefaultContainer
+from Cookie import Morsel as CookiesDefaultElement
+
 # is this present on al os ?
 import mimetypes
 
@@ -37,6 +40,7 @@ HEADER_CONTENT_RANGE = 'Content-Range'
 HEADER_LAST_MODIFIED = 'Last-modified'
 HEADER_SERVER = 'Server'
 HEADER_RANGE = 'Range'
+HEADER_SET_COOKIE = 'Set-Cookie'
 
 SAVE_AS_TPL = 'attachment; filename="{0:s}"'
 
@@ -56,6 +60,7 @@ HTTP_CODES[429] = "Too Many Requests"
 HTTP_CODES[431] = "Request Header Fields Too Large"
 
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
+
 
 
 class HttpProtocolError(Exception):  # raise on http-spec violation
@@ -224,6 +229,12 @@ class LastUpdatedOrderedDict(OrderedDict):
       del self[key]
     OrderedDict.__setitem__(self, key, value, dict_setitem=dict_setitem)
 
+class DictAsObject(dict): # prototype for settings ?
+  def __getattr__(self, item):
+    return self.__getitem__(item)
+
+  def __setattr__(self, key, value):
+    return self.__setitem__(key, value)
 
 class CaseInsensitiveHttpEnv(object):
   """
@@ -277,17 +288,30 @@ class CaseInsensitiveHttpEnv(object):
     return cur_val == val
 
 
-class HttpMessage(object):  # meta-object
-  body = ''
+class HttpMessage(object):  # bare meta-object
+  headers = {}
+  body = None
+  settings = None
+  env = None
+
+  def __init__(self, settings, env):
+    self.settings = settings
+    self.env = env
+
+  def prepare(self):
+    pass
 
 
 class HttpRequest(HttpMessage):
   files = {}
   post_vars = {}
   get_vars = {}
+  cookies = {}
 
-  def __init__(self, env):
-    self.env = env
+  def __init__(self, settings, env):
+    HttpMessage.__init__(self, settings, env)
+    #self.settings = settings
+    #self.env = env
     #for k,v in env.iteritems():
     #  print k,' = ',v
     self.headers = CaseInsensitiveHttpEnv(env)
@@ -310,7 +334,11 @@ class HttpRequest(HttpMessage):
       self.content_length = int(l)
     self.body = io.BytesIO()
 
-  def parse(self): # parse body, post, get, files and cookies.
+  def prepare(self):
+    """
+      parse body, post, get, files and cookies.
+    """
+    # ~~~ BODY ~~~
     if self.content_length > MAX_CONTENT_SIZE: # declared size too large ...
       raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
       # do not event bother ;-)
@@ -322,15 +350,23 @@ class HttpRequest(HttpMessage):
         self.body.seek(0)
       except:
         pass # TODO : crash ? or keep silent ?
+    # ~~~ COOKIES ~~~
+    cookie_str = self.env.get('HTTP_COOKIE',None)
+    if cookie_str:
+      self.cookies = ctx.cookie_class(cookie_str)
+    # ~~~ GET ~~~
     for k,v in _tokenize_query_str(self.query_string, probe=False):
       print "GET ",k," = ",v
       self.get_vars[k] = v
-    if 'multipart/' not in self.content_type: # or check for application/x-www-form-urlencoded ?
+    # ~~~ POST/body (normal) ~~~
+    if 'multipart/' not in self.content_type:
+      # or check for application/x-www-form-urlencoded ?
       # split data from body into POST vars
       for k,v in _tokenize_query_str(self.get_body()):
         print "POST ",k," = ",v
         self.post_vars[k] = v
-    else: # handle multipart POST data
+    # ~~~ POST/body (multipart) ~~~
+    else:
       pass
     # notes to myself :
     #  - try to keep all data in body (especially large blobs)
@@ -345,13 +381,32 @@ class HttpRequest(HttpMessage):
     return self.body.read(self.content_length)
 
   def post(self, key, default=None, required=False):
-    pass
+    if key in self.post_vars:
+      return self.post_vars[key]
+    if required:
+      raise KeyError("POST[{0:s}] not found !".format(key))
+    else:
+      return default
 
   def get(self, key, default=None, required=False):
-    pass
+    if key in self.get_vars:
+      return self.get_vars[key]
+    if required:
+      raise KeyError("GET[{0:s}] not found !".format(key))
+    else:
+      return default
+
 
   def arg(self, key, default=None, required=False):
-    pass
+    if key in self.get_vars:
+      return self.get_vars[key]
+    if key in self.post_vars:
+          return self.post_vars[key]
+    if required:
+      raise KeyError("Parameter [{0:s}] not found !".format(key))
+    else:
+      return default
+
 
   def uri(self, host=False):
     if host:
@@ -363,15 +418,20 @@ class HttpRequest(HttpMessage):
 class HttpResponse(HttpMessage):
   status_code = 200
   status_message = None
+  cookies = None
   headers = LastUpdatedOrderedDict()
   fix_content_length = True
   # http_version = '' <- will not be used ?
 
-  def __init__(self):  # , version='HTTP/1.1'):
+  def __init__(self, settings, env):  # , version='HTTP/1.1'):
+    HttpMessage.__init__(self, settings, env)
     # self.http_version = version
     pass
 
-  def status(self, code, message=None):
+  def prepare(self, settings):
+    self.cookies = settings.cookies_container_class()
+
+  def set_status(self, code, message=None):
     self.status_code = code
     self.status_message = message
 
@@ -384,18 +444,35 @@ class HttpResponse(HttpMessage):
       resp.append((k.title(), str(v)))
     return resp
 
-  def finish(self):  # calculate content-length header if not set
+  def set_cookie(self, name, value, **opts):
+    pass # TODO: implement me
+
+  def finish(self):
+    # store cookie
+    self.headers[HEADER_SET_COOKIE] = [] # TODO : fill !!!
+    # calculate content-length header if not set
     if self.fix_content_length:
       s = len(self.body)
       self.headers[HEADER_CONTENT_LENGTH] = str(s)
 
 
 class TheContext(object):
-  def __init__(self, env):
-    self.request = HttpRequest(env)
-    self.response = HttpResponse()  # version=self.request.version)
-    self.env = env
+  def __init__(self, env, settings):
+    self.settings = settings
+    self.request = HttpRequest(settings)
+    self.response = HttpResponse(settings)  # version=self.request.version)
 
+  def prepare(self, env):
+    self.env = env
+    self.request.prepare(env)
+    self.response.prepare(env)
+
+  # I know this looks weird, but it is rly handy ;-)
+  def cookie(self,name, **kw): # magic cookie set/get wrapper
+    if len(kw) == 0:
+      return self.request.cookies[name]
+    else:
+      self.response.set_cookie(name, **kw)
 
 #
 # -------------- ROUTER  -----
@@ -632,12 +709,12 @@ class Http4xx(Exception):
 # 3xx and 4xx handlers
 
 def _http_4xx_handler(_, ctx, error):
-  ctx.response.status(error.code, error.info)
+  ctx.response.set_status(error.code, error.info)
   return "{0:d} : {1:s}".format(error.code, error.info)
 
 
 def _http_3xx_handler(_, ctx, error):
-  ctx.response.status(error.code)
+  ctx.response.set_status(error.code)
   ctx.response.headers[HEADER_LOCATION] = error.target
   return '<a href="{0:s}">Moved : {0:s}</a>'.format(error.target)
 
@@ -672,22 +749,36 @@ HOOK_POST = 'post'
 POSSIBLE_HOOKS = [HOOK_PRE, HOOK_POST]
 
 
+class TheSettings(object):
+  cookies_container_class = CookiesDefaultContainer
+  cookies_element_class = CookiesDefaultElement
+  be_verbose = True
+
+  def __init__(self, source=None):
+    if source:
+      self.load(source)
+
+  def load(self, source): # import dict
+    for k,v in source.iteritems():
+      setattr(self, k, v)
+
+
 class CookingPot(object):
   """
    >>main<< class, glues everything ...
   """
   _write_using_writer = False
   router = DefaultRouter()
-  be_verbose = True
-  auto_json = True
   _exception_handlers = []
   handle_3xx = _http_3xx_handler
   handle_4xx = _http_4xx_handler
   pre_hooks = []
   post_hooks = []
+  settings = None
 
-  def __init__(self, router_class=None):
+  def __init__(self, router_class=None, settings=None):
     logging.debug("Main object init")
+    self.settings = TheSettings(settings)
     if router_class:
       self.router = router_class()
     self.router.default = _default_request_handler
@@ -726,11 +817,11 @@ class CookingPot(object):
     self.router.add_entry(testable, target=target, **kw)
 
   def _handle_error(self, ctx, error):
-    ctx.response.status(httplib.INTERNAL_SERVER_ERROR)  # 500
+    ctx.response.set_status(httplib.INTERNAL_SERVER_ERROR)  # 500
     for entry in self._exception_handlers:
       if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
-    if self.be_verbose:
+    if self.settings.be_verbose:
       return _verbose_error_handler(ctx, error)
     else:
       return _silent_error_handler(ctx, error)
@@ -738,14 +829,14 @@ class CookingPot(object):
   def wsgi_handler(self, environ, start_response):
     logging.debug('WSGI handler called ...')
     exc_info = None
-    ctx = TheContext(environ)
+    ctx = TheContext(environ, self.settings)
     for k, v in DEFAULT_HEADERS.iteritems():
       ctx.response.headers[k] = v
     try:
       # one will say that is insane, but it handle the situation that
       # exception handler will fail somehow ....
       try:
-        ctx.request.parse()
+        ctx.parse()
         for _h in self.pre_hooks:
           if callable(_h['func']):
             logging.debug("Calling PRE hook : {0:s}".format(str(_h)))
@@ -765,7 +856,7 @@ class CookingPot(object):
     except Exception as epic_fail:
       logging.error("EPIC FAIL : " + str(epic_fail))
       ctx.response.body = "CRITICAL ERROR"
-      ctx.response.status(httplib.INTERNAL_SERVER_ERROR)  # 500
+      ctx.response.set_status(httplib.INTERNAL_SERVER_ERROR)  # 500
     ctx.response.finish()
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()
@@ -860,7 +951,7 @@ def enable_auto_range_handler():  # <- do we need this ?
     ranges = _parse_range(header_value, max_len=org_size)
     if not header_value or len(header_value) == 0:
       return
-    ctx.response.status(httplib.PARTIAL_CONTENT)  # 206, avoid magic constant ;-)
+    ctx.response.set_status(httplib.PARTIAL_CONTENT)  # 206, avoid magic constant ;-)
     if len(ranges) == 1:
       a, b = ranges[0]
       ctx.response.body = ctx.response.body[a:b]

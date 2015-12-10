@@ -117,8 +117,14 @@ def default_route(ctx):
 def handle3(ctx):
   #for k,v in ctx.request.headers._env.iteritems():
   #  print `k`,`v`
+  s = ''
+  s += 'GET:{0}'.format(repr(ctx.request.get_vars))
+  s += '\n\n'
+  s += 'POST:{0}'.format(repr(ctx.request.post_vars))
+  s += '\n\n'
+  s += 'COOKIE:{0}'.format(repr(ctx.request.cookies))
 
-  return """
+  return """<pre>{0:s}</pre><hr>
   <form method="GET" action="?">
   <input name="f1" value="x1"><input type="submit">
   </form>
@@ -132,8 +138,7 @@ def handle3(ctx):
   <input type="file" name="file" />
   <input type="submit">
   </form>
-  """
-
+  """.format(s)
 
 
 # --------------------------------------------------------------------
