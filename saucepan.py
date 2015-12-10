@@ -314,7 +314,7 @@ class HttpRequest(HttpMessage):
     #self.env = env
     #for k,v in env.iteritems():
     #  print k,' = ',v
-    self.headers = CaseInsensitiveHttpEnv(env)
+    self.headers = CaseInsensitiveHttpEnv(self.env)
     self.verb = env.get('REQUEST_METHOD')
     self.method = self.verb  # You call it verb, I call it method
     self.protocol = env.get('SERVER_PROTOCOL')
@@ -337,6 +337,9 @@ class HttpRequest(HttpMessage):
   def prepare(self):
     """
       parse body, post, get, files and cookies.
+      IDEA: implement variables initialization as lazy properties so they will
+      be evaluated on first usage, not always !
+      Tis should speed-up a little ...
     """
     # ~~~ BODY ~~~
     if self.content_length > MAX_CONTENT_SIZE: # declared size too large ...
@@ -353,7 +356,7 @@ class HttpRequest(HttpMessage):
     # ~~~ COOKIES ~~~
     cookie_str = self.env.get('HTTP_COOKIE',None)
     if cookie_str:
-      self.cookies = ctx.cookie_class(cookie_str)
+      self.cookies = self.settings.cookies_container_class(cookie_str)
     # ~~~ GET ~~~
     for k,v in _tokenize_query_str(self.query_string, probe=False):
       print "GET ",k," = ",v
@@ -366,13 +369,15 @@ class HttpRequest(HttpMessage):
         print "POST ",k," = ",v
         self.post_vars[k] = v
     # ~~~ POST/body (multipart) ~~~
-    else:
+    else: # TODO: handle multipart
       pass
     # notes to myself :
     #  - try to keep all data in body (especially large blobs)
     #    by storing offset to variables in FILES array (access wrappers ?)
     #
-
+  def set_cookie(self,**kw):
+    c = self.settings.cookies_element_class(**kw) # TODO : implement me
+    pass
 
   def get_body(self):
     if self.content_length < 0:
@@ -423,13 +428,8 @@ class HttpResponse(HttpMessage):
   fix_content_length = True
   # http_version = '' <- will not be used ?
 
-  def __init__(self, settings, env):  # , version='HTTP/1.1'):
-    HttpMessage.__init__(self, settings, env)
-    # self.http_version = version
-    pass
-
-  def prepare(self, settings):
-    self.cookies = settings.cookies_container_class()
+  def prepare(self):
+    self.cookies = self.settings.cookies_container_class()
 
   def set_status(self, code, message=None):
     self.status_code = code
@@ -459,13 +459,12 @@ class HttpResponse(HttpMessage):
 class TheContext(object):
   def __init__(self, env, settings):
     self.settings = settings
-    self.request = HttpRequest(settings)
-    self.response = HttpResponse(settings)  # version=self.request.version)
+    self.request = HttpRequest(env, settings)
+    self.response = HttpResponse(env, settings)  # version=self.request.version)
 
-  def prepare(self, env):
-    self.env = env
-    self.request.prepare(env)
-    self.response.prepare(env)
+  def prepare(self):
+    self.request.prepare()
+    self.response.prepare()
 
   # I know this looks weird, but it is rly handy ;-)
   def cookie(self,name, **kw): # magic cookie set/get wrapper
@@ -829,14 +828,14 @@ class CookingPot(object):
   def wsgi_handler(self, environ, start_response):
     logging.debug('WSGI handler called ...')
     exc_info = None
-    ctx = TheContext(environ, self.settings)
+    ctx = TheContext(self.settings, environ)
     for k, v in DEFAULT_HEADERS.iteritems():
       ctx.response.headers[k] = v
     try:
       # one will say that is insane, but it handle the situation that
       # exception handler will fail somehow ....
       try:
-        ctx.parse()
+        ctx.prepare()
         for _h in self.pre_hooks:
           if callable(_h['func']):
             logging.debug("Calling PRE hook : {0:s}".format(str(_h)))
