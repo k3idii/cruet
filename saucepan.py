@@ -64,6 +64,31 @@ class HttpProtocolError(Exception):  # raise on http-spec violation
   pass
 
 
+
+class LazyPropertyWrapper1(object): # http://stackoverflow.com/a/6849299
+  def __init__(self, init_func):
+    self.fn = init_func
+    self.name = init_func.__name__
+
+  def __get__(self, obj, cls):
+    if obj is None:
+      return None
+    value = self.fn(obj)
+    setattr(obj, self.name, value)
+    return value
+
+class LazyPropertyWrapper(object): # http://stackoverflow.com/a/6849299
+  def __init__(self, init_func):
+    self.fn = init_func
+    self.name = init_func.__name__
+
+  def __get__(self, obj, cls):
+    if obj is None:
+      return None
+    return self.fn(obj)
+
+
+
 def get_random_string(size, encode='hex', factor=2):
   if encode:
     return os.urandom(1 + size / factor).encode(encode)[:size]
@@ -333,25 +358,6 @@ class HttpRequest(HttpMessage):
       self.content_length = int(l)
     self.body = io.BytesIO()
 
-  def _parse_query_string(self):
-    for k, v in _tokenize_query_str(self.query_string, probe=False):
-      print "GET ", k, " = ", v
-      self.get_vars[k] = v
-
-  def _parse_body(self):
-    if 'multipart/' not in self.content_type:
-      # or check for application/x-www-form-urlencoded ?
-      # split data from body into POST vars
-      for k, v in _tokenize_query_str(self.get_body(), probe=True):
-        print "POST ", k, " = ", v
-        self.post_vars[k] = v
-    # ~~~ POST/body (multipart) ~~~
-    else:  # TODO: !! handle/parse multipart !!
-      pass
-      # notes to myself :
-      #  - try to keep all data in body (especially large blobs)
-      #    by storing offset to variables in FILES array (access wrappers ?)
-
   def prepare(self):
     """
       parse body, post, get, files and cookies.
@@ -374,20 +380,13 @@ class HttpRequest(HttpMessage):
       except Exception as _:
         pass  # TODO : crash ? or keep silent ?
     # ~~~ COOKIES ~~~
-    cookie_str = self.env.get('HTTP_COOKIE', None)
-    if cookie_str:
-      self.cookies = self.settings.cookies_container_class(cookie_str)
-    # TODO: we can move this to fire when accessing GET, POST or FILES vars ...
-    # will this improve performance ?
+    # moved ...
     #  ~~~ GET ~~~
-    self._parse_query_string()
+    # moved to @lazy get ; self._parse_query_string()
     # ~~~ POST/body (normal) ~~~
-    self._parse_body()
+    # moved .... ; self._parse_body()
 
-  def set_cookie(self, **kw):
-    c = self.settings.cookies_element_class(**kw)
-    # TODO : implement me
-    return c
+
 
   def get_body(self):
     if self.content_length < 0:
@@ -395,7 +394,26 @@ class HttpRequest(HttpMessage):
     self.body.seek(0)
     return self.body.read(self.content_length)
 
-  def post(self, key, default=None, required=False):
+  def _parse_body(self):
+    print "Well ... parse body ... "
+    # override FILES and POST properties ...
+    self.post = {}
+    self.files = {}
+    if 'multipart/' not in self.content_type:
+      # or check for application/x-www-form-urlencoded ?
+      # split data from body into POST vars
+      for k, v in _tokenize_query_str(self.get_body(), probe=True):
+        print "POST ", k, " = ", v
+        self.post[k] = v
+    # ~~~ POST/body (multipart) ~~~
+    else:  # TODO: !! handle/parse multipart !!
+      pass
+      # notes to myself :
+      #  - try to keep all data in body (especially large blobs)
+      #    by storing offset to variables in FILES array (access wrappers ?)
+
+
+  def old_post(self, key, default=None, required=False):
     if key in self.post_vars:
       return self.post_vars[key]
     if required:
@@ -403,19 +421,41 @@ class HttpRequest(HttpMessage):
     else:
       return default
 
-  def get(self, key, default=None, required=False):
-    if key in self.get_vars:
-      return self.get_vars[key]
-    if required:
-      raise KeyError("GET[{0:s}] not found !".format(key))
+  @LazyPropertyWrapper
+  def files(self):
+    self._parse_body()
+    return self.files
+
+  @LazyPropertyWrapper
+  def post(self):
+    self._parse_body()
+    return self.post
+
+  @LazyPropertyWrapper
+  def cookies(self):
+    cookie_str = self.env.get('HTTP_COOKIE', None)
+    if cookie_str:
+      self.cookies = self.settings.cookies_container_class(cookie_str)
     else:
-      return default
+      self.cookies = None
+    return self.cookies
+
+  @LazyPropertyWrapper
+  def get(self):
+    rv = {}
+    for k, v in _tokenize_query_str(self.query_string, probe=False):
+      print "GET ", k, " = ", v
+      rv[k] = v
+    self.get = rv
+    return rv
 
   def arg(self, key, default=None, required=False):
-    if key in self.get_vars:
-      return self.get_vars[key]
-    if key in self.post_vars:
-      return self.post_vars[key]
+    if key in self.get:
+      return self.get[key]
+    if key in self.post:
+      return self.post[key]
+    if key in self.cookies:
+      return self.cookies[key]
     if required:
       raise KeyError("Parameter [{0:s}] not found !".format(key))
     else:
@@ -454,8 +494,10 @@ class HttpResponse(HttpMessage):
       resp.append((k.title(), str(v)))
     return resp
 
-  def set_cookie(self, name, value, **opts):
-    pass  # TODO: implement me
+  def set_cookie(self, **kw):
+    c = self.settings.cookies_element_class(**kw)
+    # TODO : implement me
+    return c
 
   def finish(self):
     # store cookie

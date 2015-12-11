@@ -118,11 +118,12 @@ def handle3(ctx):
   #for k,v in ctx.request.headers._env.iteritems():
   #  print `k`,`v`
   s = ''
-  s += 'GET:{0}'.format(repr(ctx.request.get_vars))
+  s += 'GET:{0}'.format(repr(ctx.request.get))
   s += '\n\n'
-  s += 'POST:{0}'.format(repr(ctx.request.post_vars))
+  s += 'POST:{0}'.format(repr(ctx.request.post))
   s += '\n\n'
   s += 'COOKIE:{0}'.format(repr(ctx.request.cookies))
+  print "Now get == ", ctx.request.get
 
   return """<pre>{0:s}</pre><hr>
   <form method="GET" action="?">
