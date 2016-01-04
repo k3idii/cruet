@@ -67,6 +67,39 @@ class HttpProtocolError(Exception):  # raise on http-spec violation
   pass
 
 
+class LazyProperty(property):
+  def __init__(self, func, doc=None, allow_set=False):
+    super(LazyProperty, self).__init__(func)
+    self._func = func
+    self._allow_set = allow_set
+    self.__doc__ = doc or func.__doc__
+    self._name = func.__name__ # no extra 'name' as arg yet, useless
+    self._flag = "_got_{}".format(self._name)
+
+  def __set__(self, obj, val):
+    if self._allow_set:
+      obj.__dict__[self._name] = val
+    else:
+      raise AttributeError("Can't set value to lazy attribute !")
+
+
+  def __get__(self, instance, class_type=None):
+    if instance is None:
+      return False # or raise error ?
+    if hasattr(instance, self._flag):
+      return instance.__dict__[self._name]
+    value = self._func(instance) # replace !
+    instance.__dict__[self._name] = value
+    setattr(instance, self._flag, 1)
+    return value
+
+
+
+
+
+
+
+
 def get_random_string(size, encode='hex', factor=2):
   if encode:
     return os.urandom(1 + size / factor).encode(encode)[:size]
@@ -297,16 +330,21 @@ class HttpMessage(object):  # bare meta-object
   def __init__(self, settings, env):
     self.settings = settings
     self.env = env
+    self.on_init()
+
+  def on_init(self):
+    pass
 
   def prepare(self):
     pass
 
 
 class HttpRequest(HttpMessage):
-  files = {}
-  post_vars = {}
-  get_vars = {}
-  cookies = {}
+  # files = {} # lazy !!!
+  # post_vars = {} # goto lazy
+  # get_vars = {} # goto lazy
+  # cookies = {}  # goto lazy init
+  is_chunked = False
 
   def __init__(self, settings, env):
     HttpMessage.__init__(self, settings, env)
@@ -314,30 +352,34 @@ class HttpRequest(HttpMessage):
     #self.env = env
     #for k,v in env.iteritems():
     #  print k,' = ',v
-    self.headers = CaseInsensitiveHttpEnv(env)
-    self.verb = env.get('REQUEST_METHOD')
+
+  def on_init(self):
+    self.headers = CaseInsensitiveHttpEnv(self.env)
+    self.verb = self.env.get('REQUEST_METHOD')
     self.method = self.verb  # You call it verb, I call it method
-    self.protocol = env.get('SERVER_PROTOCOL')
-    self.path = env.get('PATH_INFO')
-    self.host = env.get('HTTP_HOST')
-    self.query_string = env.get('QUERY_STRING')
-    self.content_type = env.get('CONTENT_TYPE')
-    self.wsgi_input = env.get('wsgi.input')
-    self.is_chunked = False
+    self.protocol = self.env.get('SERVER_PROTOCOL')
+    self.path = self.env.get('PATH_INFO')
+    self.host = self.env.get('HTTP_HOST')
+    self.query_string = self.env.get('QUERY_STRING')
+    self.content_type = self.env.get('CONTENT_TYPE')
+    self.wsgi_input = self.env.get('wsgi.input')
+
     enc = self.headers.get('TRANSFER_ENCODING','').lower()
     if 'chunk' in enc: # well, it is so pro ;-)
       self.is_chunked = True
-    l = env.get('CONTENT_LENGTH','')
+    l = self.env.get('CONTENT_LENGTH','')
     if len(l) < 1:
       self.content_length = 0
     else:
       self.content_length = int(l)
     self.body = io.BytesIO()
 
+
   def prepare(self):
     """
       parse body, post, get, files and cookies.
     """
+    return
     # ~~~ BODY ~~~
     if self.content_length > MAX_CONTENT_SIZE: # declared size too large ...
       raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
@@ -372,6 +414,14 @@ class HttpRequest(HttpMessage):
     #  - try to keep all data in body (especially large blobs)
     #    by storing offset to variables in FILES array (access wrappers ?)
     #
+
+
+  #@property
+  @LazyProperty
+  def is_ok(self):
+    print "print ok eval"
+    return "[ok value]"
+
 
 
   def get_body(self):
@@ -428,8 +478,8 @@ class HttpResponse(HttpMessage):
     # self.http_version = version
     pass
 
-  def prepare(self, settings):
-    self.cookies = settings.cookies_container_class()
+  def prepare(self):
+    self.cookies = self.settings.cookies_container_class()
 
   def set_status(self, code, message=None):
     self.status_code = code
@@ -459,13 +509,13 @@ class HttpResponse(HttpMessage):
 class TheContext(object):
   def __init__(self, env, settings):
     self.settings = settings
-    self.request = HttpRequest(settings)
-    self.response = HttpResponse(settings)  # version=self.request.version)
-
-  def prepare(self, env):
     self.env = env
-    self.request.prepare(env)
-    self.response.prepare(env)
+    self.request = HttpRequest(settings, env)
+    self.response = HttpResponse(settings, env)  # version=self.request.version)
+
+  def prepare(self):
+    self.request.prepare()
+    self.response.prepare()
 
   # I know this looks weird, but it is rly handy ;-)
   def cookie(self,name, **kw): # magic cookie set/get wrapper
@@ -552,8 +602,8 @@ def _default_router_do_call(ctx, fn, a, kw):
 
 class DefaultRouter(AbstractRouter):
   _SIMPLE_CHAR_SET = 'a-zA-Z0-9'
-  _SIMPLE_RE_FIND = r'<([^>]*)>'
-  _SIMPLE_RE_REPLACE = r'(?P<\1>[' + _SIMPLE_CHAR_SET + ']*)'
+  _SIMPLE_RE_FIND = r'<([^>]+)>'
+  _SIMPLE_RE_REPLACE = r'(?P<\1>[' + _SIMPLE_CHAR_SET + ']+)'
   _type_mapping = {}
 
   def setup(self):
@@ -830,13 +880,13 @@ class CookingPot(object):
     logging.debug('WSGI handler called ...')
     exc_info = None
     ctx = TheContext(environ, self.settings)
-    for k, v in DEFAULT_HEADERS.iteritems():
-      ctx.response.headers[k] = v
     try:
       # one will say that is insane, but it handle the situation that
       # exception handler will fail somehow ....
       try:
-        ctx.parse()
+        ctx.prepare()
+        for k, v in DEFAULT_HEADERS.iteritems():
+          ctx.response.headers[k] = v
         for _h in self.pre_hooks:
           if callable(_h['func']):
             logging.debug("Calling PRE hook : {0:s}".format(str(_h)))

@@ -13,7 +13,7 @@ sauce.enable_auto_range_handler()
 # --------------------------------------------------------------------
 # classic add route (like bottle, converted to regex)
 @sauce.route('/hello/<name>', check_method=["GET", "POST"], custom_param="Hello")
-def handle(ctx, name=None, custom_param="<missing>"):
+def handle(ctx, name=None, custom_param="Hi"):
   print ctx.request.headers.get('test', None)
   ctx.response.headers['test'] = 'Yes'
   return "{0:s} <b>{1:s}</b>".format(custom_param, name)
@@ -107,7 +107,7 @@ def crash_it(ctx):
 # --------------------------------------------------------------------
 # file upload demo
 @sauce.pan.route("/upload")
-def default_route(ctx):
+def upl_route(ctx):
   print ctx.request.headers._env
   return "OK"
 
@@ -145,6 +145,10 @@ def handle3(ctx):
 # default route (ROUTE_ALWAYS == None == always match)
 @sauce.pan.route(sauce.ROUTE_ALWAYS)
 def default_route(ctx):
+  v1 = ctx.request.is_ok
+  v2 = ctx.request.is_ok
+  print "IS OK VALUE :", v1, v2
+
   return "Hello. This is default handler !"
 
 
