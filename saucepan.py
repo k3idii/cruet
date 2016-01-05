@@ -66,6 +66,36 @@ class HttpProtocolError(Exception):  # raise on http-spec violation
   pass
 
 
+class LazyProperty(property):
+  def __init__(self, func, doc=None, allow_set=False):
+    super(LazyProperty, self).__init__(func)
+    self._func = func
+    self._allow_set = allow_set
+    self.__doc__ = doc or func.__doc__
+    self._name = func.__name__ # no extra 'name' as arg yet, useless
+    self._flag = "_got_{}".format(self._name)
+
+  def __set__(self, obj, val):
+    if self._allow_set:
+      obj.__dict__[self._name] = val
+    else:
+      raise AttributeError("Can't set value to lazy attribute !")
+
+
+  def __get__(self, instance, class_type=None):
+    if instance is None:
+      return False # or raise error ?
+    if hasattr(instance, self._flag):
+      return instance.__dict__[self._name]
+    value = self._func(instance) # replace !
+    instance.__dict__[self._name] = value
+    setattr(instance, self._flag, 1)
+    return value
+
+
+
+
+
 def get_random_string(size, encode='hex', factor=2):
   if encode:
     return os.urandom(1 + size / factor).encode(encode)[:size]
