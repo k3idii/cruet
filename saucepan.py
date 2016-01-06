@@ -61,39 +61,38 @@ HTTP_CODES[431] = "Request Header Fields Too Large"
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
 
 
-
 class HttpProtocolError(Exception):  # raise on http-spec violation
   pass
 
 
+_ALLOW_LAZY_PROPERTY_SET = False
+
+
 class LazyProperty(property):
-  def __init__(self, func, doc=None, allow_set=False):
+  def __init__(self, func, doc=None):
     super(LazyProperty, self).__init__(func)
     self._func = func
-    self._allow_set = allow_set
     self.__doc__ = doc or func.__doc__
-    self._name = func.__name__ # no extra 'name' as arg yet, useless
+    self._name = func.__name__  # no extra 'name' as arg yet, useless
     self._flag = "_got_{}".format(self._name)
 
-  def __set__(self, obj, val):
-    if self._allow_set:
-      obj.__dict__[self._name] = val
+  def __set__(self, instance, val):
+    if _ALLOW_LAZY_PROPERTY_SET:
+      instance.__dict__[self._name] = val
+      if not hasattr(instance, self._flag):
+        setattr(instance, self._flag, 1)
     else:
       raise AttributeError("Can't set value to lazy attribute !")
 
-
   def __get__(self, instance, class_type=None):
     if instance is None:
-      return False # or raise error ?
+      return False  # or raise error ?
     if hasattr(instance, self._flag):
       return instance.__dict__[self._name]
-    value = self._func(instance) # replace !
+    value = self._func(instance)  # replace !
     instance.__dict__[self._name] = value
     setattr(instance, self._flag, 1)
     return value
-
-
-
 
 
 def get_random_string(size, encode='hex', factor=2):
@@ -320,6 +319,14 @@ class CaseInsensitiveHttpEnv(object):
         return True
     return cur_val == val
 
+  def __str__(self):  # debug me :-)
+    c = []
+    for k in self._env:
+      if k.startswith('HTTP_'):
+        print k
+        c.append((k[5:], self._env[k]))
+    return json.dumps(c)
+
 
 class HttpMessage(object):  # bare meta-object
   headers = {}
@@ -341,36 +348,33 @@ class HttpMessage(object):  # bare meta-object
 
 class HttpRequest(HttpMessage):
   files = None
-  post_vars = None
-  get_vars = None
+  post = None
+  get = None
   cookies = None
+  body = None
 
-  def __init__(self, settings, env):
-    HttpMessage.__init__(self, settings, env)
-    #self.settings = settings
-    #self.env = env
-    #for k,v in env.iteritems():
-    #  print k,' = ',v
-    self.headers = CaseInsensitiveHttpEnv(env)
-    self.verb = env.get('REQUEST_METHOD')
+  # TODO : I really need to rewrite this.
+
+  def on_init(self):
+    self.headers = CaseInsensitiveHttpEnv(self.env)
+    self.verb = self.env.get('REQUEST_METHOD')
     self.method = self.verb  # You call it verb, I call it method
-    self.protocol = env.get('SERVER_PROTOCOL')
-    self.path = env.get('PATH_INFO')
-    self.host = env.get('HTTP_HOST')
-    self.query_string = env.get('QUERY_STRING')
-    self.content_type = env.get('CONTENT_TYPE')
-    self.wsgi_input = env.get('wsgi.input')
+    self.protocol = self.env.get('SERVER_PROTOCOL')
+    self.path = self.env.get('PATH_INFO')
+    self.host = self.env.get('HTTP_HOST')
+    self.query_string = self.env.get('QUERY_STRING')
+    self.content_type = self.env.get('CONTENT_TYPE')
+    self.wsgi_input = self.env.get('wsgi.input')
     self.is_chunked = False
-    enc = self.headers.get('TRANSFER_ENCODING','').lower()
-    if 'chunk' in enc: # well, it is so pro ;-)
+    enc = self.headers.get('TRANSFER_ENCODING', '').lower()
+    if 'chunk' in enc:  # well, it is so pro ;-)
       self.is_chunked = True
-    l = env.get('CONTENT_LENGTH','')
+    l = self.env.get('CONTENT_LENGTH', '')
     if len(l) < 1:
       self.content_length = 0
     else:
       self.content_length = int(l)
     self.body = io.BytesIO()
-
 
   def prepare(self):
     """
@@ -379,8 +383,8 @@ class HttpRequest(HttpMessage):
       be evaluated on first usage, not always !
       Tis should speed-up a little ...
     """
-    self.post_vars = {}
-    self.get_vars = {}
+    self.post = {}
+    self.get = {}
     # ~~~ BODY ~~~
     if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
       raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
@@ -393,21 +397,21 @@ class HttpRequest(HttpMessage):
         self.body.seek(0)
       except Exception as _:
         pass  # TODO : crash ? or keep silent ?
-    # ~~~ COOKIES ~~~
-    # moved ...
-    #  ~~~ GET ~~~
-    # moved to @lazy get ; self._parse_query_string()
-    # ~~~ POST/body (normal) ~~~
-    # moved .... ; self._parse_body(
+    # MOVE THIS TO LAZY METHODS
+    cookie_str = self.env.get('HTTP_COOKIE', None)
+    if cookie_str:
+      self.cookies = self.settings.cookies_container_class(cookie_str)
+    else:
+      self.cookies = None
+    # GET
+    self._parse_query_string()
+    # POST / FILES
+    self._parse_body()
 
-
-  #@property
-  @LazyProperty
-  def is_ok(self):
-    print "print ok eval"
-    return "[ok value]"
-
-
+  def _parse_query_string(self):
+    for k, v in _tokenize_query_str(self.query_string, probe=False):
+      # print "GET ", k, " = ", v
+      self.get[k] = v
 
   def get_body(self):
     if self.content_length < 0:
@@ -415,8 +419,8 @@ class HttpRequest(HttpMessage):
     self.body.seek(0)
     return self.body.read(self.content_length)
 
+  #  @lazy_vars_maker(vars=['post','files'])
   def _parse_body(self):
-    print "Well ... parse body ... "
     # override FILES and POST properties ...
     self.post = {}
     self.files = {}
@@ -428,11 +432,12 @@ class HttpRequest(HttpMessage):
         self.post[k] = v
     # ~~~ POST/body (multipart) ~~~
     else:  # TODO: !! handle/parse multipart !!
+      print "MULTIPART SHIT!"
+      print self.get_body()
       pass
       # notes to myself :
       #  - try to keep all data in body (especially large blobs)
       #    by storing offset to variables in FILES array (access wrappers ?)
-
 
   def old_post(self, key, default=None, required=False):
     if key in self.post_vars:
@@ -442,25 +447,24 @@ class HttpRequest(HttpMessage):
     else:
       return default
 
-  @LazyPropertyWrapper
-  def files(self):
+  # @LazyPropertyWrapper(store=file_vars
+  def xfiles(self):
     self._parse_body()
     return self.files
 
-  @LazyPropertyWrapper
-  def post(self):
+  # @LazyPropertyWrapper
+  def xpost(self):
     self._parse_body()
     return self.post
 
-  @LazyPropertyWrapper
-  def cookies(self):
+  # @LazyPropertyWrapper
+  def xcookies(self):
     cookie_str = self.env.get('HTTP_COOKIE', None)
     if cookie_str:
       self.cookies = self.settings.cookies_container_class(cookie_str)
     else:
       self.cookies = None
     return self.cookies
-
 
   def arg(self, key, default=None, required=False):
     if key in self.get:
@@ -473,7 +477,6 @@ class HttpRequest(HttpMessage):
       raise KeyError("Parameter [{0:s}] not found !".format(key))
     else:
       return default
-
 
   def uri(self, host=False):
     if host:
@@ -736,9 +739,13 @@ class DefaultRouter(AbstractRouter):
     if route_type == ROUTE_CHECK_SIMPLE:
       _tmp = re.sub(self._SIMPLE_RE_FIND, self._SIMPLE_RE_REPLACE, testable)
       kw['_re'] = re.compile(_tmp)
+    print kw
     return kw
 
-  def try_route(self, ctx, _callable=None, headers=None, route_type=None, **args):
+  def try_route(self, ctx, _callable=None, headers=None, route_type=None, method=None, **args):
+    if method:
+      if ctx.request.method not in method:
+        return False
     if headers and len(headers) > 0:
       for key, val in headers:
         if not ctx.request.headers.check(key, val):

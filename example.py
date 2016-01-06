@@ -10,9 +10,12 @@ sauce.enable_auto_head_handler()
 sauce.enable_auto_range_handler()
 
 
+GET_POST = sauce.METHOD_GET + sauce.METHOD_POST
+#     ^- =  list + list
+
 # --------------------------------------------------------------------
 # classic add route (like bottle, converted to regex)
-@sauce.route('/hello/<name>', check_method=["GET", "POST"], custom_param="Hello")
+@sauce.route('/hello/<name>', method=GET_POST, custom_param="Hello")
 def handle(ctx, name=None, custom_param="Hi"):
   print ctx.request.headers.get('test', None)
   ctx.response.headers['test'] = 'Yes'
@@ -123,7 +126,8 @@ def handle3(ctx):
   s += 'POST:{0}'.format(repr(ctx.request.post))
   s += '\n\n'
   s += 'COOKIE:{0}'.format(repr(ctx.request.cookies))
-  print "Now get == ", ctx.request.get
+  s += '\n\n'
+  s += 'HEADERS:{0}'.format(str(ctx.request.headers))
 
   return """<pre>{0:s}</pre><hr>
   <form method="GET" action="?">
@@ -146,10 +150,6 @@ def handle3(ctx):
 # default route (ROUTE_ALWAYS == None == always match)
 @sauce.pan.route(sauce.ROUTE_ALWAYS)
 def default_route(ctx):
-  v1 = ctx.request.is_ok
-  v2 = ctx.request.is_ok
-  print "IS OK VALUE :", v1, v2
-
   return "Hello. This is default handler !"
 
 
