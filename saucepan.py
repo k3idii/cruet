@@ -383,8 +383,10 @@ class HttpRequest(HttpMessage):
       be evaluated on first usage, not always !
       Tis should speed-up a little ...
     """
+    self.cookies = {}
     self.post = {}
     self.get = {}
+    self.files = {}
     # ~~~ BODY ~~~
     if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
       raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
@@ -395,14 +397,15 @@ class HttpRequest(HttpMessage):
         for block in fn(self.wsgi_input.read, self.content_length):
           self.body.write(block)
         self.body.seek(0)
-      except Exception as _:
+      except Exception as ex:
+        print "well , s!@# hits the fan ... ", str(ex)
         pass  # TODO : crash ? or keep silent ?
     # MOVE THIS TO LAZY METHODS
     cookie_str = self.env.get('HTTP_COOKIE', None)
     if cookie_str:
-      self.cookies = self.settings.cookies_container_class(cookie_str)
-    else:
-      self.cookies = None
+      tmp = self.settings.cookies_container_class(cookie_str)
+      for c in tmp.values():
+        self.cookies[c.key] = c.value
     # GET
     self._parse_query_string()
     # POST / FILES
@@ -489,11 +492,12 @@ class HttpResponse(HttpMessage):
   status_code = 200
   status_message = None
   cookies = None
-  headers = LastUpdatedOrderedDict()
+  headers = None
   fix_content_length = True
   # http_version = '' <- will not be used ?
 
   def prepare(self):
+    self.headers = LastUpdatedOrderedDict()
     self.cookies = self.settings.cookies_container_class()
     for k, v in self.settings.default_headers:
       self.headers[k] = v
@@ -508,18 +512,29 @@ class HttpResponse(HttpMessage):
   def get_headers(self):  # return Camel-Case headers + values as list[]
     resp = []
     for k, v in self.headers.iteritems():
-      resp.append((k.title(), str(v)))
+      if isinstance(v, list):
+        for vv in v:
+          resp.append((k.title(), str(vv)))
+      else:
+        resp.append((k.title(), str(v)))
     return resp
 
-  def set_cookie(self, **kw):
-    c = self.settings.cookies_element_class(**kw)
-    # TODO : implement me
-    return c
+  def set_cookie(self, name, value=None, **kw):
+    if len(value) > 4096:
+      raise Exception('Cookie value to long')
+    # c = self.settings.cookies_element_class()
+    self.cookies[name] = value
+    for k, v in kw.iteritems():
+      self.cookies[name][k] = v
+      # return c
 
   def finish(self):
     # store cookie
-    self.headers[HEADER_SET_COOKIE] = []
-    # TODO : !!! fill this ----^ !!!
+    if len(self.cookies) > 0:
+      cookie_list = []
+      for v in self.cookies.values():
+        cookie_list.append(v.OutputString())
+      self.headers[HEADER_SET_COOKIE] = cookie_list
     # calculate content-length header if not set
     if self.fix_content_length:
       s = len(self.body)
@@ -538,11 +553,12 @@ class TheContext(object):
     self.response.prepare()
 
   # I know this looks weird, but it is rly handy ;-)
-  def cookie(self, name, **kw):  # magic cookie set/get wrapper
-    if len(kw) == 0:
-      return self.request.cookies[name]
+  def cookie(self, name, *a, **kw):  # magic cookie set/get wrapper
+    if len(kw) == 0 and len(a) == 0:
+      return self.request.cookies.get(name, None)
     else:
-      self.response.set_cookie(name, **kw)
+      self.response.set_cookie(name, *a, **kw)
+      #                                   ^- pass value as 1st arg
 
 
 #
@@ -783,12 +799,12 @@ class Http4xx(Exception):
 
 # 3xx and 4xx handlers
 
-def _http_4xx_handler(_, ctx, error):
+def http_4xx_handler(ctx, error):
   ctx.response.set_status(error.code, error.info)
   return "{0:d} : {1:s}".format(error.code, error.info)
 
 
-def _http_3xx_handler(_, ctx, error):
+def http_3xx_handler(ctx, error):
   ctx.response.set_status(error.code)
   ctx.response.headers[HEADER_LOCATION] = error.target
   return '<a href="{0:s}">Moved : {0:s}</a>'.format(error.target)
@@ -849,8 +865,6 @@ class CookingPot(object):
   _write_using_writer = False
   router = DefaultRouter()
   _exception_handlers = []
-  handle_3xx = _http_3xx_handler
-  handle_4xx = _http_4xx_handler
   pre_hooks = []
   post_hooks = []
   settings = None
@@ -925,9 +939,9 @@ class CookingPot(object):
             _h['func'](ctx, *_h['args'], **_h['kwargs'])
 
       except Http3xx as ex:
-        ctx.response.body = self.handle_3xx(ctx, ex)
+        ctx.response.body = http_3xx_handler(ctx, ex)
       except Http4xx as ex:
-        ctx.response.body = self.handle_4xx(ctx, ex)
+        ctx.response.body = http_4xx_handler(ctx, ex)
       except Exception as ex:
         ctx.response.body = self._handle_error(ctx, ex)
     except Exception as epic_fail:

@@ -9,7 +9,6 @@ sauce.enable_auto_json()
 sauce.enable_auto_head_handler()
 sauce.enable_auto_range_handler()
 
-
 GET_POST = sauce.METHOD_GET + sauce.METHOD_POST
 #     ^- =  list + list
 
@@ -20,6 +19,18 @@ def handle(ctx, name=None, custom_param="Hi"):
   print ctx.request.headers.get('test', None)
   ctx.response.headers['test'] = 'Yes'
   return "{0:s} <b>{1:s}</b>".format(custom_param, name)
+
+
+# --------------------------------------------------------------------
+# cookie example
+@sauce.route('/cookie')
+def handle_cookies(ctx):
+  cn = 'xxx'
+  cc = ctx.cookie(cn)
+  nn = sauce.get_random_string(4)
+  ctx.cookie(cn, nn)
+  ctx.cookie('static', 'value')
+  return "Cookie [{0}] : current={1} next={2}".format(cn, cc, nn)
 
 
 # --------------------------------------------------------------------
@@ -77,6 +88,18 @@ sauce.register_static_file_handler(url_prefix='/static/')
 
 
 # --------------------------------------------------------------------
+# cookie example
+@sauce.route('/cookie')
+def handle_cookies(ctx):
+  cn = 'xxx'
+  cc = ctx.cookie(cn)
+  nn = sauce.get_random_string(4)
+  ctx.cookie(cn, nn)
+  ctx.cookie('static', 'value')
+  return "Cookie [{0}] : current={1} next={2}".format(cn, cc, nn)
+
+
+# --------------------------------------------------------------------
 # multipart answer >
 @sauce.pan.route("/multipart")
 def do_multipart(ctx):
@@ -114,11 +137,12 @@ def upl_route(ctx):
   print ctx.request.headers._env
   return "OK"
 
+
 # --------------------------------------------------------------------
 # full string match (forced by route_type)
 @sauce.pan.route('/form', route_type=sauce.ROUTE_CHECK_STR)
 def handle3(ctx):
-  #for k,v in ctx.request.headers._env.iteritems():
+  # for k,v in ctx.request.headers._env.iteritems():
   #  print `k`,`v`
   s = ''
   s += 'GET:{0}'.format(repr(ctx.request.get))
@@ -168,9 +192,9 @@ def handle_exception1(ctx, err):
 
 # --------------------------------------------------------------------
 # register exception handler (like route ^_^)
-@sauce.pan.hook(sauce.HOOK_POST, a=2)
-def post_hook_1(ctx, a):
-  ctx.response.headers['x-hooked'] = a
+@sauce.pan.hook(sauce.HOOK_POST, arg=2)
+def post_hook_1(ctx, arg):
+  ctx.response.headers['x-hooked-value'] = arg
 
 
 if __name__ == '__main__':
