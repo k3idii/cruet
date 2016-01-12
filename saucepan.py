@@ -12,6 +12,7 @@ import json
 import os
 import os.path
 import io
+import string
 
 from Cookie import SimpleCookie as CookiesDefaultContainer
 from Cookie import Morsel as CookiesDefaultElement
@@ -109,7 +110,6 @@ def get_default_http_message(code):
 
 def http_status(code, message=None):
   code = int(code)
-  print "HTTP STATUS CALL !", code, message
   if message is None:
     message = HTTP_CODES.get(code, None)
     if message is None:
@@ -271,45 +271,57 @@ class DictAsObject(dict):  # prototype for settings ?
   def __setattr__(self, key, value):
     return self.__setitem__(key, value)
 
+def str_to_env_key(name, extra_keys=None):
+  name = str(name).upper()
+  if name.startswith("HTTP_") or ( extra_keys and name in extra_keys):
+    return name
+  return "HTTP_" + name
 
-class CaseInsensitiveHttpEnv(object):
+
+# decorator
+def fix_kwarg(kwarg_name, func, *func_a, **func_kw): #<- so awesome !
+  def _wrap1(f):
+    def _wrap2(*a, **kw):
+      if kwarg_name in kw:
+        kw[kwarg_name] = func(kw[kwarg_name], *func_a, **func_kw)
+      else:
+        idx = f.func_code.co_varnames.index(kwarg_name)
+        a = list(a)
+        a[idx] = func(a[idx], *func_a, **func_kw)
+      return f(*a,**kw)
+    if kwarg_name not in f.func_code.co_varnames:
+      raise Exception("{0} not in arg names of {1}".format(kwarg_name,str(f)))
+    return _wrap2
+  return _wrap1
+
+class CaseInsensitiveEnv(object):
   """
   Object that allow to access to env storage (http headers + other metadata)
   in case-insensitive way
   """
-
   _extra_keys = ('CONTENT_TYPE', 'CONTENT_LENGTH')
   _env = None
 
   def __init__(self, env):
     self._env = env
-    # for k,v in env.iteritems():
-    #  print k,v
 
   def __getitem__(self, item):
     return self.get(item, None)
 
-  def get(self, item, default=None, require=False):
-    item = str(item)
-    item = item.upper()
-    if item.startswith("HTTP_"):
-      # well, user knows _really_ good what he needs
-      # else: we need help him a little
-      pass
-    if item in self._extra_keys:  # non HTTP_ env vars
-      pass
-    else:
-      item = "HTTP_" + item
-    val = self._env.get(item, None)
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  def get(self, key, default=None, require=False):
+    val = self._env.get(key, None)
     if val is None:
       if require:
-        raise KeyError(item)
+        raise KeyError(key)
       return default
     return val
 
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
   def has(self, key):
-    return self.get(key) is not None
+    return self._env.get(key) is not None
 
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
   def check(self, key, val):
     cur_val = self.get(key, default=None)
     if cur_val is None:
@@ -323,9 +335,54 @@ class CaseInsensitiveHttpEnv(object):
     c = []
     for k in self._env:
       if k.startswith('HTTP_'):
-        print k
         c.append((k[5:], self._env[k]))
     return json.dumps(c)
+
+
+MULTIDICT_GET_ONE = 1
+MULTIDICT_GET_ALL = 2
+
+
+class CaseInsensitiveMultiDict(object): # response headers container
+  _storage_ = None
+
+  def __init__(self, *a, **kw):
+    if len(a) > 0:
+      if isinstance(a[0], dict):
+        for k,v in a[0].iteritems():
+          self[k] = v
+    else:
+      for k,v in kw.iteritems():
+        self[k] = v
+
+  @fix_kwarg('key',string.upper)
+  def get(self, key, default=None, mode=MULTIDICT_GET_ONE):
+    if len(self._storage_[key]) > 0:
+      if mode == MULTIDICT_GET_ONE:
+        return self._storage_[key][0]
+      elif mode == MULTIDICT_GET_ALL:
+        return self._storage_[key]
+    return None
+
+  @fix_kwarg('key',string.upper)
+  def __setitem__(self, key, value):
+    if key not in self._storage_:
+      self._storage_[key] = list()
+    self._storage_[key].append(value)
+
+  @fix_kwarg('key',string.upper)
+  def __getitem__(self, key):
+    if len(self._storage_[key]) > 0:
+      return self._storage_[key][0]
+    return None
+
+  def iteritems(self):
+    for k, l in self._storage_.iteritems():
+      for v in l:
+        yield k,v
+
+
+
 
 
 class HttpMessage(object):  # bare meta-object
@@ -356,7 +413,7 @@ class HttpRequest(HttpMessage):
   # TODO : I really need to rewrite this.
 
   def on_init(self):
-    self.headers = CaseInsensitiveHttpEnv(self.env)
+    self.headers = CaseInsensitiveEnv(self.env)
     self.verb = self.env.get('REQUEST_METHOD')
     self.method = self.verb  # You call it verb, I call it method
     self.protocol = self.env.get('SERVER_PROTOCOL')
@@ -413,8 +470,11 @@ class HttpRequest(HttpMessage):
 
   def _parse_query_string(self):
     for k, v in _tokenize_query_str(self.query_string, probe=False):
-      # print "GET ", k, " = ", v
       self.get[k] = v
+
+  def make_php_like_variables(self):
+    # your eyes will bleed, however ... 
+    pass
 
   def get_body(self):
     if self.content_length < 0:
@@ -422,7 +482,6 @@ class HttpRequest(HttpMessage):
     self.body.seek(0)
     return self.body.read(self.content_length)
 
-  #  @lazy_vars_maker(vars=['post','files'])
   def _parse_body(self):
     # override FILES and POST properties ...
     self.post = {}
@@ -431,7 +490,6 @@ class HttpRequest(HttpMessage):
       # or check for application/x-www-form-urlencoded ?
       # split data from body into POST vars
       for k, v in _tokenize_query_str(self.get_body(), probe=True):
-        print "POST ", k, " = ", v
         self.post[k] = v
     # ~~~ POST/body (multipart) ~~~
     else:  # TODO: !! handle/parse multipart !!
