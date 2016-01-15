@@ -347,6 +347,7 @@ class CaseInsensitiveMultiDict(object): # response headers container
   _storage_ = None
 
   def __init__(self, *a, **kw):
+    self._storage_ = dict()
     if len(a) > 0:
       if isinstance(a[0], dict):
         for k,v in a[0].iteritems():
@@ -555,7 +556,8 @@ class HttpResponse(HttpMessage):
   # http_version = '' <- will not be used ?
 
   def prepare(self):
-    self.headers = LastUpdatedOrderedDict()
+    #self.headers = LastUpdatedOrderedDict()
+    self.headers = CaseInsensitiveMultiDict()
     self.cookies = self.settings.cookies_container_class()
     for k, v in self.settings.default_headers:
       self.headers[k] = v
@@ -567,7 +569,13 @@ class HttpResponse(HttpMessage):
   def get_status(self):
     return http_status(self.status_code, self.status_message)
 
-  def get_headers(self):  # return Camel-Case headers + values as list[]
+  def get_headers(self):
+    r = []
+    for k,v in self.headers.iteritems():
+      r.append((k.title(), str(v)))
+    return r
+
+  def old_get_headers(self):  # return Camel-Case headers + values as list[]
     resp = []
     for k, v in self.headers.iteritems():
       if isinstance(v, list):
@@ -576,6 +584,9 @@ class HttpResponse(HttpMessage):
       else:
         resp.append((k.title(), str(v)))
     return resp
+
+  def header(self, key, value):
+    self.headers[key] = value
 
   def set_cookie(self, name, value=None, **kw):
     if len(value) > 4096:
@@ -592,7 +603,10 @@ class HttpResponse(HttpMessage):
       cookie_list = []
       for v in self.cookies.values():
         cookie_list.append(v.OutputString())
-      self.headers[HEADER_SET_COOKIE] = cookie_list
+        #self.header(HEADER_SET_COOKIE, v.OutputString())
+        self.headers[HEADER_SET_COOKIE] = v.OutputString()
+
+      # self.headers[HEADER_SET_COOKIE] = cookie_list
     # calculate content-length header if not set
     if self.fix_content_length:
       s = len(self.body)
