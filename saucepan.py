@@ -134,10 +134,47 @@ def _read_iter_blocks(read_fn, size, block_size=2048):
       return
 
 
-def _read_iter_chunks(read_fn, size):
+def _read_iter_chunks(read_fn, size, soft_fail=True):
+  nl = "\n"
+  def _read_till(fn, stop_at='\n', max_bytes=10):
+    b = ''
+    if max_bytes == -1:
+      while True:
+        c = fn(1)
+        if c == stop_at:
+          return b
+        b += c
+    else:
+      while max_bytes > 0:
+        c = fn(1)
+        if c == stop_at:
+          return b
+        b += c
+        max_bytes -= 1
+
+  def _read_next_chunk_start(fn, sep=';'):
+    n = 0
+    buf = _read_till(fn,"\n")
+    if sep in buf:
+      size, extension = buf.strip().split(sep,1)
+      size = int(size, 16)
+      #TODO: handle params
+    else:
+      size = int(buf.strip(), 16)
+    return size
+
   while True:
-    return False
-    # TODO : implement me !
+    block_size = _read_next_chunk_start(read_fn)
+    if block_size == 0:
+      return # TODO : read trailer
+    else:
+      chunk = ''
+      while block_size > 0 :
+        part = read_fn(block_size)
+        block_size -= len(part)
+        chunk += part
+      yield chunk
+      _read_till(read_fn, '\n')  # should read 2 chars !
 
 
 def _regex_get_args_kwargs(exp, mo):
@@ -437,8 +474,10 @@ class HttpRequest(HttpMessage):
     self.wsgi_input = self.env.get('wsgi.input')
     self.is_chunked = False
     enc = self.headers.get('TRANSFER_ENCODING', '').lower()
+    print "ENCODING:" + enc
     if 'chunk' in enc:  # well, it is so pro ;-)
       self.is_chunked = True
+      print "It is chunked !!!"
     l = self.env.get('CONTENT_LENGTH', '')
     if len(l) < 1:
       self.content_length = 0
@@ -451,7 +490,7 @@ class HttpRequest(HttpMessage):
       parse body, post, get, files and cookies.
       IDEA/NOTE to myself/TODO: implement variables initialization as lazy properties so they will
       be evaluated on first usage, not always !
-      Tis should speed-up a little ...
+      This should speed-up a little ...
     """
     self.cookies = {}
     self.post = {}
@@ -464,8 +503,11 @@ class HttpRequest(HttpMessage):
     if self.content_length > 0:
       try:  # re-parse body, fill BytesIO ;-)
         fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
+        print "FUNC:", fn
         for block in fn(self.wsgi_input.read, self.content_length):
+          print "Writing ", block
           self.body.write(block)
+
         self.body.seek(0)
       except Exception as ex:
         print "well , s!@# hits the fan ... ", str(ex)
@@ -496,6 +538,7 @@ class HttpRequest(HttpMessage):
     return self.body.read(self.content_length)
 
   def _parse_body(self):
+    print "BODY", self.get_body()
     # override FILES and POST properties ...
     self.post = {}
     self.files = {}
