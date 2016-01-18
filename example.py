@@ -10,6 +10,8 @@ sauce.enable_auto_head_handler()
 sauce.enable_auto_range_handler()
 
 GET_POST = sauce.METHOD_GET + sauce.METHOD_POST
+
+
 #     ^- =  list + list
 
 # --------------------------------------------------------------------
@@ -153,7 +155,8 @@ def handle3(ctx):
   <hr>
   <form method="POST" action="?"><input name="f1" value="x1"><input type="submit"></form>
   <hr>
-  <form method="POST" action="?" enctype="multipart/form-data"><input name="f1" value="x1"><input type="file" name="file" /><input type="submit"></form>
+  <form method="POST" action="?" enctype="multipart/form-data"><input name="f1" value="x1">
+  <input type="file" name="file" /><input type="submit"></form>
   """
 
 

@@ -271,15 +271,16 @@ class DictAsObject(dict):  # prototype for settings ?
   def __setattr__(self, key, value):
     return self.__setitem__(key, value)
 
+
 def str_to_env_key(name, extra_keys=None):
   name = str(name).upper()
-  if name.startswith("HTTP_") or ( extra_keys and name in extra_keys):
+  if name.startswith("HTTP_") or (extra_keys and name in extra_keys):
     return name
   return "HTTP_" + name
 
 
 # decorator
-def fix_kwarg(kwarg_name, func, *func_a, **func_kw): #<- so awesome !
+def fix_kwarg(kwarg_name, func, *func_a, **func_kw):  # <- so awesome !
   def _wrap1(f):
     def _wrap2(*a, **kw):
       if kwarg_name in kw:
@@ -288,11 +289,14 @@ def fix_kwarg(kwarg_name, func, *func_a, **func_kw): #<- so awesome !
         idx = f.func_code.co_varnames.index(kwarg_name)
         a = list(a)
         a[idx] = func(a[idx], *func_a, **func_kw)
-      return f(*a,**kw)
+      return f(*a, **kw)
+
     if kwarg_name not in f.func_code.co_varnames:
-      raise Exception("{0} not in arg names of {1}".format(kwarg_name,str(f)))
+      raise Exception("{0} not in arg names of {1}".format(kwarg_name, str(f)))
     return _wrap2
+
   return _wrap1
+
 
 class CaseInsensitiveEnv(object):
   """
@@ -343,21 +347,21 @@ MULTIDICT_GET_ONE = 1
 MULTIDICT_GET_ALL = 2
 
 
-class CaseInsensitiveMultiDict(object): # response headers container
+class CaseInsensitiveMultiDict(object):  # response headers container
   _storage_ = None
 
   def __init__(self, *a, **kw):
     self._storage_ = dict()
     if len(a) > 0:
       if isinstance(a[0], dict):
-        for k,v in a[0].iteritems():
+        for k, v in a[0].iteritems():
           self[k] = v
     else:
-      for k,v in kw.iteritems():
+      for k, v in kw.iteritems():
         self[k] = v
 
-  @fix_kwarg('key',string.upper)
-  def get(self, key, default=None, mode=MULTIDICT_GET_ONE):
+  @fix_kwarg('key', string.upper)
+  def get(self, key, mode=MULTIDICT_GET_ONE):
     if len(self._storage_[key]) > 0:
       if mode == MULTIDICT_GET_ONE:
         return self._storage_[key][0]
@@ -365,13 +369,13 @@ class CaseInsensitiveMultiDict(object): # response headers container
         return self._storage_[key]
     return None
 
-  @fix_kwarg('key',string.upper)
+  @fix_kwarg('key', string.upper)
   def __setitem__(self, key, value):
     if key not in self._storage_:
       self._storage_[key] = list()
     self._storage_[key].append(value)
 
-  @fix_kwarg('key',string.upper)
+  @fix_kwarg('key', string.upper)
   def __getitem__(self, key):
     if len(self._storage_[key]) > 0:
       return self._storage_[key][0]
@@ -380,10 +384,7 @@ class CaseInsensitiveMultiDict(object): # response headers container
   def iteritems(self):
     for k, l in self._storage_.iteritems():
       for v in l:
-        yield k,v
-
-
-
+        yield k, v
 
 
 class HttpMessage(object):  # bare meta-object
@@ -410,6 +411,17 @@ class HttpRequest(HttpMessage):
   get = None
   cookies = None
   body = None
+  headers = None
+  verb = method = None
+  protocol = None
+  path = None
+  host = None
+  content_type = None
+  content_length = 0
+  query_string = None
+  is_chunked = False
+  wsgi_input = None
+
 
   # TODO : I really need to rewrite this.
 
@@ -501,14 +513,6 @@ class HttpRequest(HttpMessage):
       #  - try to keep all data in body (especially large blobs)
       #    by storing offset to variables in FILES array (access wrappers ?)
 
-  def old_post(self, key, default=None, required=False):
-    if key in self.post_vars:
-      return self.post_vars[key]
-    if required:
-      raise KeyError("POST[{0:s}] not found !".format(key))
-    else:
-      return default
-
   # @LazyPropertyWrapper(store=file_vars
   def xfiles(self):
     self._parse_body()
@@ -556,7 +560,7 @@ class HttpResponse(HttpMessage):
   # http_version = '' <- will not be used ?
 
   def prepare(self):
-    #self.headers = LastUpdatedOrderedDict()
+    # self.headers = LastUpdatedOrderedDict()
     self.headers = CaseInsensitiveMultiDict()
     self.cookies = self.settings.cookies_container_class()
     for k, v in self.settings.default_headers:
@@ -571,7 +575,7 @@ class HttpResponse(HttpMessage):
 
   def get_headers(self):
     r = []
-    for k,v in self.headers.iteritems():
+    for k, v in self.headers.iteritems():
       r.append((k.title(), str(v)))
     return r
 
@@ -603,10 +607,10 @@ class HttpResponse(HttpMessage):
       cookie_list = []
       for v in self.cookies.values():
         cookie_list.append(v.OutputString())
-        #self.header(HEADER_SET_COOKIE, v.OutputString())
+        # self.header(HEADER_SET_COOKIE, v.OutputString())
         self.headers[HEADER_SET_COOKIE] = v.OutputString()
 
-      # self.headers[HEADER_SET_COOKIE] = cookie_list
+        # self.headers[HEADER_SET_COOKIE] = cookie_list
     # calculate content-length header if not set
     if self.fix_content_length:
       s = len(self.body)
@@ -672,6 +676,7 @@ class AbstractRouter(object):
     logging.warning("No valid route found ! Try default ...")
     self._default_route(ctx)
     return ctx
+
 
 #
 # -------------- 'Default' Router class  -----
@@ -1036,6 +1041,7 @@ class CookingPot(object):
 
 pan = CookingPot()
 
+
 # utils:
 
 
@@ -1166,6 +1172,7 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
 def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
   pan.add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
 
+
 # expose in globals, so we can use @decorator
 route = pan.route
 
@@ -1176,6 +1183,7 @@ def _wsgi_handler(environ, start_response):
 
 def wsgi_interface():
   return _wsgi_handler
+
 
 # expose WSGI handler
 application = wsgi_interface()
