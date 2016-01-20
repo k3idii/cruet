@@ -29,7 +29,6 @@ DEFAULT_LISTEN_PORT = 8008
 
 MAX_CONTENT_SIZE = 1 * 1024 * 1024  # 1 MB
 
-
 # ~~ const strings ~~
 
 SERVER_NAME = "SaucePan"
@@ -134,44 +133,52 @@ def _read_iter_blocks(read_fn, size, block_size=2048):
       return
 
 
-def _read_iter_chunks(read_fn, size, soft_fail=True):
-  nl = "\n"
+def _read_iter_chunks(read_fn, max_size):
+
   def _read_till(fn, stop_at='\n', max_bytes=10):
     b = ''
+    n = 0
     if max_bytes == -1:
       while True:
         c = fn(1)
+        n += 1
         if c == stop_at:
-          return b
+          return b, n
         b += c
     else:
       while max_bytes > 0:
         c = fn(1)
+        n += 1
         if c == stop_at:
-          return b
+          return b, n
         b += c
         max_bytes -= 1
 
   def _read_next_chunk_start(fn, sep=';'):
     n = 0
-    buf = _read_till(fn,"\n")
+    buf, num_read = _read_till(fn, "\n")
     if sep in buf:
-      size, extension = buf.strip().split(sep,1)
+      size, extension = buf.strip().split(sep, 1)
       size = int(size, 16)
-      #TODO: handle params
+      # TODO: handle params
     else:
       size = int(buf.strip(), 16)
-    return size
+    return size, num_read
 
-  while True:
-    block_size = _read_next_chunk_start(read_fn)
+  while max_size > 0:
+    block_size, read_bytes = _read_next_chunk_start(read_fn)
+    max_size -= read_bytes
+    # TODO: check if max_size > block_size !
+    if block_size > max_size:
+      raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE, "Max body size exceed !")
     if block_size == 0:
-      return # TODO : read trailer
+      return  # TODO : read trailer
     else:
       chunk = ''
-      while block_size > 0 :
+      while block_size > 0:
         part = read_fn(block_size)
         block_size -= len(part)
+        max_size -= len(part)
         chunk += part
       yield chunk
       _read_till(read_fn, '\n')  # should read 2 chars !
@@ -272,6 +279,7 @@ class WSGIRefServer(GenericServer):
     import wsgiref.simple_server as ref_srv
 
     class FixedHandler(ref_srv.WSGIRequestHandler):
+
       def address_string(self):  # Prevent reverse DNS lookups please.
         return self.client_address[0]
 
@@ -459,7 +467,6 @@ class HttpRequest(HttpMessage):
   is_chunked = False
   wsgi_input = None
 
-
   # TODO : I really need to rewrite this.
 
   def on_init(self):
@@ -497,21 +504,20 @@ class HttpRequest(HttpMessage):
     self.get = {}
     self.files = {}
     # ~~~ BODY ~~~
-    if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
-      raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
-      # do not event bother ;-)
-    if self.content_length > 0:
-      try:  # re-parse body, fill BytesIO ;-)
-        fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
-        print "FUNC:", fn
-        for block in fn(self.wsgi_input.read, self.content_length):
-          print "Writing ", block
-          self.body.write(block)
 
-        self.body.seek(0)
-      except Exception as ex:
-        print "well , s!@# hits the fan ... ", str(ex)
-        pass  # TODO : crash ? or keep silent ?
+    max_body_size = MAX_CONTENT_SIZE
+    if self.content_length > 0:
+      if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
+        raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
+      max_body_size = self.content_length
+    try:  # re-parse body, fill BytesIO ;-)
+      fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
+      for block in fn(self.wsgi_input.read, max_body_size):
+        self.body.write(block)
+      self.body.seek(0)
+    except Exception as ex:
+      print "Problem @ read body ... ", str(ex), " silently pass ;-)"
+      pass  # TODO : should we crash ? or keep silent ?
     # MOVE THIS TO LAZY METHODS
     cookie_str = self.env.get('HTTP_COOKIE', None)
     if cookie_str:
@@ -600,6 +606,7 @@ class HttpResponse(HttpMessage):
   cookies = None
   headers = None
   fix_content_length = True
+
   # http_version = '' <- will not be used ?
 
   def prepare(self):
@@ -1017,7 +1024,7 @@ class CookingPot(object):
 
   def add_exception_handler(self, ex_type, fn, **kw):
     self._exception_handlers.append(
-      dict(ex_type=ex_type, handler=fn, kwargs=kw)
+        dict(ex_type=ex_type, handler=fn, kwargs=kw)
     )
 
   def route(self, testable, **kw):
