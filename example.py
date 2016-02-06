@@ -55,7 +55,6 @@ def handle3(ctx):
 # --------------------------------------------------------------------
 # Generator as route
 def router_generator(ctx):
-  print ">> Generator is trying to run ..."
 
   def handle4(local_ctx):
     print "Hello from generated function"

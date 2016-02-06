@@ -109,7 +109,7 @@ def get_default_http_message(code):
 
 def http_status(code, message=None):
   code = int(code)
-  print "HTTP STATUS CALL !", code, message
+  # print "HTTP STATUS CALL !", code, message
   if message is None:
     message = HTTP_CODES.get(code, None)
     if message is None:
@@ -323,7 +323,7 @@ class CaseInsensitiveHttpEnv(object):
     c = []
     for k in self._env:
       if k.startswith('HTTP_'):
-        print k
+        # print k
         c.append((k[5:], self._env[k]))
     return json.dumps(c)
 
@@ -428,7 +428,7 @@ class HttpRequest(HttpMessage):
       # or check for application/x-www-form-urlencoded ?
       # split data from body into POST vars
       for k, v in _tokenize_query_str(self.get_body(), probe=True):
-        print "POST ", k, " = ", v
+        # print "POST ", k, " = ", v
         self.post[k] = v
     # ~~~ POST/body (multipart) ~~~
     else:  # TODO: !! handle/parse multipart !!
@@ -739,7 +739,6 @@ class DefaultRouter(AbstractRouter):
     if route_type == ROUTE_CHECK_SIMPLE:
       _tmp = re.sub(self._SIMPLE_RE_FIND, self._SIMPLE_RE_REPLACE, testable)
       kw['_re'] = re.compile(_tmp)
-    print kw
     return kw
 
   def try_route(self, ctx, _callable=None, headers=None, route_type=None, method=None, **args):
