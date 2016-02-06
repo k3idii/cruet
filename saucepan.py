@@ -12,6 +12,7 @@ import json
 import os
 import os.path
 import io
+import string
 
 from Cookie import SimpleCookie as CookiesDefaultContainer
 from Cookie import Morsel as CookiesDefaultElement
@@ -27,7 +28,6 @@ DEFAULT_LISTEN_HOST = '0.0.0.0'
 DEFAULT_LISTEN_PORT = 8008
 
 MAX_CONTENT_SIZE = 1 * 1024 * 1024  # 1 MB
-
 
 # ~~ const strings ~~
 
@@ -109,7 +109,6 @@ def get_default_http_message(code):
 
 def http_status(code, message=None):
   code = int(code)
-  # print "HTTP STATUS CALL !", code, message
   if message is None:
     message = HTTP_CODES.get(code, None)
     if message is None:
@@ -134,10 +133,55 @@ def _read_iter_blocks(read_fn, size, block_size=2048):
       return
 
 
-def _read_iter_chunks(read_fn, size):
-  while True:
-    return False
-    # TODO : implement me !
+def _read_iter_chunks(read_fn, max_size):
+
+  def _read_till(fn, stop_at='\n', max_bytes=10):
+    b = ''
+    n = 0
+    if max_bytes == -1:
+      while True:
+        c = fn(1)
+        n += 1
+        if c == stop_at:
+          return b, n
+        b += c
+    else:
+      while max_bytes > 0:
+        c = fn(1)
+        n += 1
+        if c == stop_at:
+          return b, n
+        b += c
+        max_bytes -= 1
+
+  def _read_next_chunk_start(fn, sep=';'):
+    n = 0
+    buf, num_read = _read_till(fn, "\n")
+    if sep in buf:
+      size, extension = buf.strip().split(sep, 1)
+      size = int(size, 16)
+      # TODO: handle params
+    else:
+      size = int(buf.strip(), 16)
+    return size, num_read
+
+  while max_size > 0:
+    block_size, read_bytes = _read_next_chunk_start(read_fn)
+    max_size -= read_bytes
+    # TODO: check if max_size > block_size !
+    if block_size > max_size:
+      raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE, "Max body size exceed !")
+    if block_size == 0:
+      return  # TODO : read trailer
+    else:
+      chunk = ''
+      while block_size > 0:
+        part = read_fn(block_size)
+        block_size -= len(part)
+        max_size -= len(part)
+        chunk += part
+      yield chunk
+      _read_till(read_fn, '\n')  # should read 2 chars !
 
 
 def _regex_get_args_kwargs(exp, mo):
@@ -235,6 +279,7 @@ class WSGIRefServer(GenericServer):
     import wsgiref.simple_server as ref_srv
 
     class FixedHandler(ref_srv.WSGIRequestHandler):
+
       def address_string(self):  # Prevent reverse DNS lookups please.
         return self.client_address[0]
 
@@ -272,44 +317,60 @@ class DictAsObject(dict):  # prototype for settings ?
     return self.__setitem__(key, value)
 
 
-class CaseInsensitiveHttpEnv(object):
+def str_to_env_key(name, extra_keys=None):
+  name = str(name).upper()
+  if name.startswith("HTTP_") or (extra_keys and name in extra_keys):
+    return name
+  return "HTTP_" + name
+
+
+# decorator
+def fix_kwarg(kwarg_name, func, *func_a, **func_kw):  # <- so awesome !
+  def _wrap1(f):
+    def _wrap2(*a, **kw):
+      if kwarg_name in kw:
+        kw[kwarg_name] = func(kw[kwarg_name], *func_a, **func_kw)
+      else:
+        idx = f.func_code.co_varnames.index(kwarg_name)
+        a = list(a)
+        a[idx] = func(a[idx], *func_a, **func_kw)
+      return f(*a, **kw)
+
+    if kwarg_name not in f.func_code.co_varnames:
+      raise Exception("{0} not in arg names of {1}".format(kwarg_name, str(f)))
+    return _wrap2
+
+  return _wrap1
+
+
+class CaseInsensitiveEnv(object):
   """
   Object that allow to access to env storage (http headers + other metadata)
   in case-insensitive way
   """
-
   _extra_keys = ('CONTENT_TYPE', 'CONTENT_LENGTH')
   _env = None
 
   def __init__(self, env):
     self._env = env
-    # for k,v in env.iteritems():
-    #  print k,v
 
   def __getitem__(self, item):
     return self.get(item, None)
 
-  def get(self, item, default=None, require=False):
-    item = str(item)
-    item = item.upper()
-    if item.startswith("HTTP_"):
-      # well, user knows _really_ good what he needs
-      # else: we need help him a little
-      pass
-    if item in self._extra_keys:  # non HTTP_ env vars
-      pass
-    else:
-      item = "HTTP_" + item
-    val = self._env.get(item, None)
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  def get(self, key, default=None, require=False):
+    val = self._env.get(key, None)
     if val is None:
       if require:
-        raise KeyError(item)
+        raise KeyError(key)
       return default
     return val
 
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
   def has(self, key):
-    return self.get(key) is not None
+    return self._env.get(key) is not None
 
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
   def check(self, key, val):
     cur_val = self.get(key, default=None)
     if cur_val is None:
@@ -323,9 +384,52 @@ class CaseInsensitiveHttpEnv(object):
     c = []
     for k in self._env:
       if k.startswith('HTTP_'):
-        # print k
         c.append((k[5:], self._env[k]))
     return json.dumps(c)
+
+
+MULTIDICT_GET_ONE = 1
+MULTIDICT_GET_ALL = 2
+
+
+class CaseInsensitiveMultiDict(object):  # response headers container
+  _storage_ = None
+
+  def __init__(self, *a, **kw):
+    self._storage_ = dict()
+    if len(a) > 0:
+      if isinstance(a[0], dict):
+        for k, v in a[0].iteritems():
+          self[k] = v
+    else:
+      for k, v in kw.iteritems():
+        self[k] = v
+
+  @fix_kwarg('key', string.upper)
+  def get(self, key, mode=MULTIDICT_GET_ONE):
+    if len(self._storage_[key]) > 0:
+      if mode == MULTIDICT_GET_ONE:
+        return self._storage_[key][0]
+      elif mode == MULTIDICT_GET_ALL:
+        return self._storage_[key]
+    return None
+
+  @fix_kwarg('key', string.upper)
+  def __setitem__(self, key, value):
+    if key not in self._storage_:
+      self._storage_[key] = list()
+    self._storage_[key].append(value)
+
+  @fix_kwarg('key', string.upper)
+  def __getitem__(self, key):
+    if len(self._storage_[key]) > 0:
+      return self._storage_[key][0]
+    return None
+
+  def iteritems(self):
+    for k, l in self._storage_.iteritems():
+      for v in l:
+        yield k, v
 
 
 class HttpMessage(object):  # bare meta-object
@@ -352,11 +456,21 @@ class HttpRequest(HttpMessage):
   get = None
   cookies = None
   body = None
+  headers = None
+  verb = method = None
+  protocol = None
+  path = None
+  host = None
+  content_type = None
+  content_length = 0
+  query_string = None
+  is_chunked = False
+  wsgi_input = None
 
   # TODO : I really need to rewrite this.
 
   def on_init(self):
-    self.headers = CaseInsensitiveHttpEnv(self.env)
+    self.headers = CaseInsensitiveEnv(self.env)
     self.verb = self.env.get('REQUEST_METHOD')
     self.method = self.verb  # You call it verb, I call it method
     self.protocol = self.env.get('SERVER_PROTOCOL')
@@ -367,8 +481,10 @@ class HttpRequest(HttpMessage):
     self.wsgi_input = self.env.get('wsgi.input')
     self.is_chunked = False
     enc = self.headers.get('TRANSFER_ENCODING', '').lower()
+    print "ENCODING:" + enc
     if 'chunk' in enc:  # well, it is so pro ;-)
       self.is_chunked = True
+      print "It is chunked !!!"
     l = self.env.get('CONTENT_LENGTH', '')
     if len(l) < 1:
       self.content_length = 0
@@ -381,28 +497,33 @@ class HttpRequest(HttpMessage):
       parse body, post, get, files and cookies.
       IDEA/NOTE to myself/TODO: implement variables initialization as lazy properties so they will
       be evaluated on first usage, not always !
-      Tis should speed-up a little ...
+      This should speed-up a little ...
     """
+    self.cookies = {}
     self.post = {}
     self.get = {}
+    self.files = {}
     # ~~~ BODY ~~~
-    if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
-      raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
-      # do not event bother ;-)
+
+    max_body_size = MAX_CONTENT_SIZE
     if self.content_length > 0:
-      try:  # re-parse body, fill BytesIO ;-)
-        fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
-        for block in fn(self.wsgi_input.read, self.content_length):
-          self.body.write(block)
-        self.body.seek(0)
-      except Exception as _:
-        pass  # TODO : crash ? or keep silent ?
+      if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
+        raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
+      max_body_size = self.content_length
+    try:  # re-parse body, fill BytesIO ;-)
+      fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
+      for block in fn(self.wsgi_input.read, max_body_size):
+        self.body.write(block)
+      self.body.seek(0)
+    except Exception as ex:
+      print "Problem @ read body ... ", str(ex), " silently pass ;-)"
+      pass  # TODO : should we crash ? or keep silent ?
     # MOVE THIS TO LAZY METHODS
     cookie_str = self.env.get('HTTP_COOKIE', None)
     if cookie_str:
-      self.cookies = self.settings.cookies_container_class(cookie_str)
-    else:
-      self.cookies = None
+      tmp = self.settings.cookies_container_class(cookie_str)
+      for c in tmp.values():
+        self.cookies[c.key] = c.value
     # GET
     self._parse_query_string()
     # POST / FILES
@@ -410,8 +531,11 @@ class HttpRequest(HttpMessage):
 
   def _parse_query_string(self):
     for k, v in _tokenize_query_str(self.query_string, probe=False):
-      # print "GET ", k, " = ", v
       self.get[k] = v
+
+  def make_php_like_variables(self):
+    # your eyes will bleed, however ... 
+    pass
 
   def get_body(self):
     if self.content_length < 0:
@@ -419,8 +543,8 @@ class HttpRequest(HttpMessage):
     self.body.seek(0)
     return self.body.read(self.content_length)
 
-  #  @lazy_vars_maker(vars=['post','files'])
   def _parse_body(self):
+    print "BODY", self.get_body()
     # override FILES and POST properties ...
     self.post = {}
     self.files = {}
@@ -428,7 +552,6 @@ class HttpRequest(HttpMessage):
       # or check for application/x-www-form-urlencoded ?
       # split data from body into POST vars
       for k, v in _tokenize_query_str(self.get_body(), probe=True):
-        # print "POST ", k, " = ", v
         self.post[k] = v
     # ~~~ POST/body (multipart) ~~~
     else:  # TODO: !! handle/parse multipart !!
@@ -438,14 +561,6 @@ class HttpRequest(HttpMessage):
       # notes to myself :
       #  - try to keep all data in body (especially large blobs)
       #    by storing offset to variables in FILES array (access wrappers ?)
-
-  def old_post(self, key, default=None, required=False):
-    if key in self.post_vars:
-      return self.post_vars[key]
-    if required:
-      raise KeyError("POST[{0:s}] not found !".format(key))
-    else:
-      return default
 
   # @LazyPropertyWrapper(store=file_vars
   def xfiles(self):
@@ -489,11 +604,14 @@ class HttpResponse(HttpMessage):
   status_code = 200
   status_message = None
   cookies = None
-  headers = LastUpdatedOrderedDict()
+  headers = None
   fix_content_length = True
+
   # http_version = '' <- will not be used ?
 
   def prepare(self):
+    # self.headers = LastUpdatedOrderedDict()
+    self.headers = CaseInsensitiveMultiDict()
     self.cookies = self.settings.cookies_container_class()
     for k, v in self.settings.default_headers:
       self.headers[k] = v
@@ -505,21 +623,44 @@ class HttpResponse(HttpMessage):
   def get_status(self):
     return http_status(self.status_code, self.status_message)
 
-  def get_headers(self):  # return Camel-Case headers + values as list[]
+  def get_headers(self):
+    r = []
+    for k, v in self.headers.iteritems():
+      r.append((k.title(), str(v)))
+    return r
+
+  def old_get_headers(self):  # return Camel-Case headers + values as list[]
     resp = []
     for k, v in self.headers.iteritems():
-      resp.append((k.title(), str(v)))
+      if isinstance(v, list):
+        for vv in v:
+          resp.append((k.title(), str(vv)))
+      else:
+        resp.append((k.title(), str(v)))
     return resp
 
-  def set_cookie(self, **kw):
-    c = self.settings.cookies_element_class(**kw)
-    # TODO : implement me
-    return c
+  def header(self, key, value):
+    self.headers[key] = value
+
+  def set_cookie(self, name, value=None, **kw):
+    if len(value) > 4096:
+      raise Exception('Cookie value to long')
+    # c = self.settings.cookies_element_class()
+    self.cookies[name] = value
+    for k, v in kw.iteritems():
+      self.cookies[name][k] = v
+      # return c
 
   def finish(self):
     # store cookie
-    self.headers[HEADER_SET_COOKIE] = []
-    # TODO : !!! fill this ----^ !!!
+    if len(self.cookies) > 0:
+      cookie_list = []
+      for v in self.cookies.values():
+        cookie_list.append(v.OutputString())
+        # self.header(HEADER_SET_COOKIE, v.OutputString())
+        self.headers[HEADER_SET_COOKIE] = v.OutputString()
+
+        # self.headers[HEADER_SET_COOKIE] = cookie_list
     # calculate content-length header if not set
     if self.fix_content_length:
       s = len(self.body)
@@ -538,11 +679,12 @@ class TheContext(object):
     self.response.prepare()
 
   # I know this looks weird, but it is rly handy ;-)
-  def cookie(self, name, **kw):  # magic cookie set/get wrapper
-    if len(kw) == 0:
-      return self.request.cookies[name]
+  def cookie(self, name, *a, **kw):  # magic cookie set/get wrapper
+    if len(kw) == 0 and len(a) == 0:
+      return self.request.cookies.get(name, None)
     else:
-      self.response.set_cookie(name, **kw)
+      self.response.set_cookie(name, *a, **kw)
+      #                                   ^- pass value as 1st arg
 
 
 #
@@ -584,6 +726,7 @@ class AbstractRouter(object):
     logging.warning("No valid route found ! Try default ...")
     self._default_route(ctx)
     return ctx
+
 
 #
 # -------------- 'Default' Router class  -----
@@ -739,6 +882,7 @@ class DefaultRouter(AbstractRouter):
     if route_type == ROUTE_CHECK_SIMPLE:
       _tmp = re.sub(self._SIMPLE_RE_FIND, self._SIMPLE_RE_REPLACE, testable)
       kw['_re'] = re.compile(_tmp)
+    print kw
     return kw
 
   def try_route(self, ctx, _callable=None, headers=None, route_type=None, method=None, **args):
@@ -782,12 +926,12 @@ class Http4xx(Exception):
 
 # 3xx and 4xx handlers
 
-def _http_4xx_handler(_, ctx, error):
+def http_4xx_handler(ctx, error):
   ctx.response.set_status(error.code, error.info)
   return "{0:d} : {1:s}".format(error.code, error.info)
 
 
-def _http_3xx_handler(_, ctx, error):
+def http_3xx_handler(ctx, error):
   ctx.response.set_status(error.code)
   ctx.response.headers[HEADER_LOCATION] = error.target
   return '<a href="{0:s}">Moved : {0:s}</a>'.format(error.target)
@@ -848,8 +992,6 @@ class CookingPot(object):
   _write_using_writer = False
   router = DefaultRouter()
   _exception_handlers = []
-  handle_3xx = _http_3xx_handler
-  handle_4xx = _http_4xx_handler
   pre_hooks = []
   post_hooks = []
   settings = None
@@ -882,7 +1024,7 @@ class CookingPot(object):
 
   def add_exception_handler(self, ex_type, fn, **kw):
     self._exception_handlers.append(
-      dict(ex_type=ex_type, handler=fn, kwargs=kw)
+        dict(ex_type=ex_type, handler=fn, kwargs=kw)
     )
 
   def route(self, testable, **kw):
@@ -924,9 +1066,9 @@ class CookingPot(object):
             _h['func'](ctx, *_h['args'], **_h['kwargs'])
 
       except Http3xx as ex:
-        ctx.response.body = self.handle_3xx(ctx, ex)
+        ctx.response.body = http_3xx_handler(ctx, ex)
       except Http4xx as ex:
-        ctx.response.body = self.handle_4xx(ctx, ex)
+        ctx.response.body = http_4xx_handler(ctx, ex)
       except Exception as ex:
         ctx.response.body = self._handle_error(ctx, ex)
     except Exception as epic_fail:
@@ -948,6 +1090,7 @@ class CookingPot(object):
 
 
 pan = CookingPot()
+
 
 # utils:
 
@@ -1079,6 +1222,7 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
 def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
   pan.add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
 
+
 # expose in globals, so we can use @decorator
 route = pan.route
 
@@ -1089,6 +1233,7 @@ def _wsgi_handler(environ, start_response):
 
 def wsgi_interface():
   return _wsgi_handler
+
 
 # expose WSGI handler
 application = wsgi_interface()
