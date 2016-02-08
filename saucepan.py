@@ -14,8 +14,11 @@ import os.path
 import io
 import string
 
+import cgi
+
 from Cookie import SimpleCookie as CookiesDefaultContainer
 from Cookie import Morsel as CookiesDefaultElement
+
 
 # is this present on al os ?
 import mimetypes
@@ -119,6 +122,64 @@ def http_status(code, message=None):
 
 
 # useful stuff
+
+def _parse_multipart(fd, boundary=None):
+  _CHUNK_SIZE = 1024
+
+  def boo():
+    # print "FAIL !"
+    raise Http4xx(httplib.BAD_REQUEST, "Invalid Multipart!")
+
+  # print "BOUNDARY : ", boundary
+  if boundary is None:
+    raise Exception("Need to guess boundary marker ... not yet implemented !")
+  if 1 > len(boundary) > 69:  # rfc1341
+    boo()
+  delimiter = "--{0}".format(boundary)
+  close_delimiter_marker = '--'
+
+  ln = fd.readline().strip()
+  #print `ln`,`delimiter`
+  if ln != delimiter:
+    boo()
+
+  while True:
+
+    entry_meta = []
+    while True:
+      ln = fd.readline().strip()
+      #print " -> Line : ", ln
+      if ln == '':
+        # print " -> EMPTY ! <- "
+        break
+      name, data = ln.split(": ",1)
+      val, opts = cgi.parse_header(data)
+      # print "--> HEADERS :", name, val, opts
+      entry_meta.append({'name':name, 'value':val, 'opts':opts})
+    offset = fd.tell()
+    # print "DATA AT OFFSET : ", offset
+
+    r = ''
+    while True:
+      chunk = fd.readline()
+      if chunk == '':
+        #print "WTF"
+        return
+      #rint "CHUNK = ",`chunk`
+      if chunk.startswith(delimiter):
+        # r = 'some data'
+        yield r.strip(),entry_meta
+        if chunk.strip().endswith(close_delimiter_marker):
+          # print "END END"
+          return
+        else:
+          break
+      else:
+        r += chunk
+
+
+  yield "YO LO"
+  print "PARSING SHIT"
 
 def _read_iter_blocks(read_fn, size, block_size=2048):
   while True:
@@ -431,6 +492,9 @@ class CaseInsensitiveMultiDict(object):  # response headers container
       for v in l:
         yield k, v
 
+class FileLike(object):
+  def __init__(self):
+    pass
 
 class HttpMessage(object):  # bare meta-object
   headers = {}
@@ -443,12 +507,11 @@ class HttpMessage(object):  # bare meta-object
     self.env = env
     self.on_init()
 
-  def on_init(self):
+  def on_init(self): # called automatically by init, just to skip __init__ overriding
     pass
 
-  def prepare(self):
+  def prepare(self): # called manually by owner
     pass
-
 
 class HttpRequest(HttpMessage):
   files = None
@@ -467,9 +530,8 @@ class HttpRequest(HttpMessage):
   is_chunked = False
   wsgi_input = None
 
-  # TODO : I really need to rewrite this.
-
   def on_init(self):
+
     self.headers = CaseInsensitiveEnv(self.env)
     self.verb = self.env.get('REQUEST_METHOD')
     self.method = self.verb  # You call it verb, I call it method
@@ -481,15 +543,17 @@ class HttpRequest(HttpMessage):
     self.wsgi_input = self.env.get('wsgi.input')
     self.is_chunked = False
     enc = self.headers.get('TRANSFER_ENCODING', '').lower()
-    print "ENCODING:" + enc
     if 'chunk' in enc:  # well, it is so pro ;-)
       self.is_chunked = True
       print "It is chunked !!!"
-    l = self.env.get('CONTENT_LENGTH', '')
-    if len(l) < 1:
+    l = self.env.get('CONTENT_LENGTH', None)
+    if l is None or l == '':
       self.content_length = 0
     else:
-      self.content_length = int(l)
+      cl = int(l)
+      if cl < 1:
+        cl = 0
+      self.content_length = cl
     self.body = io.BytesIO()
 
   def prepare(self):
@@ -506,12 +570,13 @@ class HttpRequest(HttpMessage):
     # ~~~ BODY ~~~
 
     max_body_size = MAX_CONTENT_SIZE
-    if self.content_length > 0:
+    if self.content_length >= 0:
       if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
         raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
       max_body_size = self.content_length
     try:  # re-parse body, fill BytesIO ;-)
       fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
+      print "Reader : ",fn,   max_body_size
       for block in fn(self.wsgi_input.read, max_body_size):
         self.body.write(block)
       self.body.seek(0)
@@ -541,26 +606,33 @@ class HttpRequest(HttpMessage):
     if self.content_length < 0:
       self.content_length = MAX_CONTENT_SIZE
     self.body.seek(0)
-    return self.body.read(self.content_length)
+    content = self.body.read(self.content_length)
+    self.body.seek(0)
+    return content
 
   def _parse_body(self):
-    print "BODY", self.get_body()
     # override FILES and POST properties ...
     self.post = {}
     self.files = {}
-    if 'multipart/' not in self.content_type:
-      # or check for application/x-www-form-urlencoded ?
+    # or check for application/x-www-form-urlencoded ?
+    if 'multipart/' in self.content_type:
+      print self.get_body()
+      value, options = cgi.parse_header(self.content_type)
+      for field in _parse_multipart(self.body, **options):
+        data, opts = field
+        print field
+        if 'filename' in opts:
+          print " ->>> FILE <<<- "
+        # print "PART:", field
+
+      # notes to myself :
+      #  - try to keep all data in body (especially large blobs)
+      # ~~~ POST/body (multipart) ~~~
+      #    by storing offset to variables in FILES array (access wrappers ?)
+    else:
       # split data from body into POST vars
       for k, v in _tokenize_query_str(self.get_body(), probe=True):
         self.post[k] = v
-    # ~~~ POST/body (multipart) ~~~
-    else:  # TODO: !! handle/parse multipart !!
-      print "MULTIPART SHIT!"
-      print self.get_body()
-      pass
-      # notes to myself :
-      #  - try to keep all data in body (especially large blobs)
-      #    by storing offset to variables in FILES array (access wrappers ?)
 
   # @LazyPropertyWrapper(store=file_vars
   def xfiles(self):
@@ -606,11 +678,9 @@ class HttpResponse(HttpMessage):
   cookies = None
   headers = None
   fix_content_length = True
-
   # http_version = '' <- will not be used ?
 
   def prepare(self):
-    # self.headers = LastUpdatedOrderedDict()
     self.headers = CaseInsensitiveMultiDict()
     self.cookies = self.settings.cookies_container_class()
     for k, v in self.settings.default_headers:
@@ -1049,6 +1119,8 @@ class CookingPot(object):
   def wsgi_handler(self, environ, start_response):
     logging.debug('WSGI handler called ...')
     exc_info = None
+    #import pprint
+    #pprint.pprint(environ)
     ctx = TheContext(self.settings, environ)
     try:
       # one will say that is insane, but it handle the situation that
