@@ -121,31 +121,199 @@ def http_status(code, message=None):
   return "{0} {1}".format(code, message)
 
 
+def str_to_env_key(name, extra_keys=None):
+  name = str(name).upper()
+  if name.startswith("HTTP_") or (extra_keys and name in extra_keys):
+    return name
+  return "HTTP_" + name
+
+# decorator
+def fix_kwarg(kwarg_name, func, *func_a, **func_kw):  # <- so awesome !
+  def _wrap1(f):
+    def _wrap2(*a, **kw):
+      if kwarg_name in kw:
+        kw[kwarg_name] = func(kw[kwarg_name], *func_a, **func_kw)
+      else:
+        idx = f.func_code.co_varnames.index(kwarg_name)
+        a = list(a)
+        a[idx] = func(a[idx], *func_a, **func_kw)
+      return f(*a, **kw)
+
+    if kwarg_name not in f.func_code.co_varnames:
+      raise Exception("{0} not in arg names of {1}".format(kwarg_name, str(f)))
+    return _wrap2
+
+  return _wrap1
+
+
+class CaseInsensitiveEnv(object):
+  """
+  Object that allow to access to env storage (http headers + other metadata)
+  in case-insensitive way
+  """
+  _extra_keys = ('CONTENT_TYPE', 'CONTENT_LENGTH')
+  _env = None
+
+  def __init__(self, env):
+    self._env = env
+
+  def __getitem__(self, item):
+    return self.get(item, None)
+
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  def get(self, key, default=None, require=False):
+    val = self._env.get(key, None)
+    if val is None:
+      if require:
+        raise KeyError(key)
+      return default
+    return val
+
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  def has(self, key):
+    return self._env.get(key) is not None
+
+  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  def check(self, key, val):
+    cur_val = self.get(key, default=None)
+    if cur_val is None:
+      return False
+    if isinstance(val, list):
+      if cur_val in val:
+        return True
+    return cur_val == val
+
+  def __str__(self):  # debug me :-)
+    c = []
+    for k in self._env:
+      if k.startswith('HTTP_'):
+        c.append((k[5:], self._env[k]))
+    return json.dumps(c)
+
+
+MULTIDICT_GET_ONE = 1
+MULTIDICT_GET_ALL = 2
+
+class MultiValDict(object):  # response headers container
+  _storage_ = None
+  _key_mod = None
+
+  def __init__(self, *a, **kw):
+    self._storage_ = dict()
+    if len(a) > 0:
+      if isinstance(a[0], dict):
+        for k, v in a[0].iteritems():
+          self[k] = v
+    else:
+      for k, v in kw.iteritems():
+        self[k] = v
+
+  def get(self, key, default=None, mode=MULTIDICT_GET_ONE):
+    if self._key_mod:
+      key = self._key_mod(key)
+    if len(self._storage_[key]) > 0:
+      if mode == MULTIDICT_GET_ONE:
+        return self._storage_[key][0]
+      elif mode == MULTIDICT_GET_ALL:
+        return self._storage_[key]
+    return default
+
+  def __setitem__(self, key, value):
+    if self._key_mod:
+      key = self._key_mod(key)
+    if key not in self._storage_:
+      self._storage_[key] = list()
+    self._storage_[key].append(value)
+
+  def __getitem__(self, key):
+    if self._key_mod:
+      key = self._key_mod(key)
+    if len(self._storage_[key]) > 0:
+      return self._storage_[key][0]
+    return None
+
+  def iteritems(self):
+    for k, l in self._storage_.iteritems():
+      for v in l:
+        yield k, v
+
+
+class CaseInsensitiveMultiDict(MultiValDict):  # response headers container
+
+  def _key_mod(self, k):
+    return str(k).upper()
+
+
+class oldCaseInsensitiveMultiDict(object):  # response headers container
+
+  _storage_ = None
+
+  def __init__(self, *a, **kw):
+    self._storage_ = dict()
+    if len(a) > 0:
+      if isinstance(a[0], dict):
+        for k, v in a[0].iteritems():
+          self[k] = v
+    else:
+      for k, v in kw.iteritems():
+        self[k] = v
+
+  @fix_kwarg('key', string.upper)
+  def get(self, key, mode=MULTIDICT_GET_ONE):
+    if len(self._storage_[key]) > 0:
+      if mode == MULTIDICT_GET_ONE:
+        return self._storage_[key][0]
+      elif mode == MULTIDICT_GET_ALL:
+        return self._storage_[key]
+    return None
+
+  @fix_kwarg('key', string.upper)
+  def __setitem__(self, key, value):
+    if key not in self._storage_:
+      self._storage_[key] = list()
+    self._storage_[key].append(value)
+
+  @fix_kwarg('key', string.upper)
+  def __getitem__(self, key):
+    if len(self._storage_[key]) > 0:
+      return self._storage_[key][0]
+    return None
+
+  def iteritems(self):
+    for k, l in self._storage_.iteritems():
+      for v in l:
+        yield k, v
+
+
+
+
+
 # useful stuff
 
 def _parse_multipart(fd, boundary=None):
   _CHUNK_SIZE = 1024
 
-  def boo():
-    # print "FAIL !"
-    raise Http4xx(httplib.BAD_REQUEST, "Invalid Multipart!")
+  def boo(s=''):
+    print "FAIL !",s
+    raise Http4xx(httplib.BAD_REQUEST, "Invalid Multipart/" + s)
 
   # print "BOUNDARY : ", boundary
   if boundary is None:
     raise Exception("Need to guess boundary marker ... not yet implemented !")
   if 1 > len(boundary) > 69:  # rfc1341
-    boo()
+    boo("Invalid boundary marker size ")
   delimiter = "--{0}".format(boundary)
   close_delimiter_marker = '--'
 
   ln = fd.readline().strip()
   #print `ln`,`delimiter`
   if ln != delimiter:
-    boo()
+    boo('invalid data - not delimiter')
 
   while True:
 
-    entry_meta = []
+    meta = CaseInsensitiveMultiDict()
+
     while True:
       ln = fd.readline().strip()
       #print " -> Line : ", ln
@@ -154,10 +322,14 @@ def _parse_multipart(fd, boundary=None):
         break
       name, data = ln.split(": ",1)
       val, opts = cgi.parse_header(data)
-      # print "--> HEADERS :", name, val, opts
-      entry_meta.append({'name':name, 'value':val, 'opts':opts})
+      # print "--> HEADERS :", name,' : ', val,' ; ', opts
+      meta[name] = {'value':val, 'opts':opts}
+      # entry_meta.append({'name':name, 'value':val, 'opts':opts})
     offset = fd.tell()
     # print "DATA AT OFFSET : ", offset
+
+    if meta.get('Content-Disposition',None) is None:
+      boo('No Content-Disposition!')
 
     r = ''
     while True:
@@ -168,7 +340,7 @@ def _parse_multipart(fd, boundary=None):
       #rint "CHUNK = ",`chunk`
       if chunk.startswith(delimiter):
         # r = 'some data'
-        yield r.strip(),entry_meta
+        yield r.strip(), meta
         if chunk.strip().endswith(close_delimiter_marker):
           # print "END END"
           return
@@ -377,121 +549,6 @@ class DictAsObject(dict):  # prototype for settings ?
   def __setattr__(self, key, value):
     return self.__setitem__(key, value)
 
-
-def str_to_env_key(name, extra_keys=None):
-  name = str(name).upper()
-  if name.startswith("HTTP_") or (extra_keys and name in extra_keys):
-    return name
-  return "HTTP_" + name
-
-
-# decorator
-def fix_kwarg(kwarg_name, func, *func_a, **func_kw):  # <- so awesome !
-  def _wrap1(f):
-    def _wrap2(*a, **kw):
-      if kwarg_name in kw:
-        kw[kwarg_name] = func(kw[kwarg_name], *func_a, **func_kw)
-      else:
-        idx = f.func_code.co_varnames.index(kwarg_name)
-        a = list(a)
-        a[idx] = func(a[idx], *func_a, **func_kw)
-      return f(*a, **kw)
-
-    if kwarg_name not in f.func_code.co_varnames:
-      raise Exception("{0} not in arg names of {1}".format(kwarg_name, str(f)))
-    return _wrap2
-
-  return _wrap1
-
-
-class CaseInsensitiveEnv(object):
-  """
-  Object that allow to access to env storage (http headers + other metadata)
-  in case-insensitive way
-  """
-  _extra_keys = ('CONTENT_TYPE', 'CONTENT_LENGTH')
-  _env = None
-
-  def __init__(self, env):
-    self._env = env
-
-  def __getitem__(self, item):
-    return self.get(item, None)
-
-  @fix_kwarg('key', str_to_env_key, _extra_keys)
-  def get(self, key, default=None, require=False):
-    val = self._env.get(key, None)
-    if val is None:
-      if require:
-        raise KeyError(key)
-      return default
-    return val
-
-  @fix_kwarg('key', str_to_env_key, _extra_keys)
-  def has(self, key):
-    return self._env.get(key) is not None
-
-  @fix_kwarg('key', str_to_env_key, _extra_keys)
-  def check(self, key, val):
-    cur_val = self.get(key, default=None)
-    if cur_val is None:
-      return False
-    if isinstance(val, list):
-      if cur_val in val:
-        return True
-    return cur_val == val
-
-  def __str__(self):  # debug me :-)
-    c = []
-    for k in self._env:
-      if k.startswith('HTTP_'):
-        c.append((k[5:], self._env[k]))
-    return json.dumps(c)
-
-
-MULTIDICT_GET_ONE = 1
-MULTIDICT_GET_ALL = 2
-
-
-class CaseInsensitiveMultiDict(object):  # response headers container
-  _storage_ = None
-
-  def __init__(self, *a, **kw):
-    self._storage_ = dict()
-    if len(a) > 0:
-      if isinstance(a[0], dict):
-        for k, v in a[0].iteritems():
-          self[k] = v
-    else:
-      for k, v in kw.iteritems():
-        self[k] = v
-
-  @fix_kwarg('key', string.upper)
-  def get(self, key, mode=MULTIDICT_GET_ONE):
-    if len(self._storage_[key]) > 0:
-      if mode == MULTIDICT_GET_ONE:
-        return self._storage_[key][0]
-      elif mode == MULTIDICT_GET_ALL:
-        return self._storage_[key]
-    return None
-
-  @fix_kwarg('key', string.upper)
-  def __setitem__(self, key, value):
-    if key not in self._storage_:
-      self._storage_[key] = list()
-    self._storage_[key].append(value)
-
-  @fix_kwarg('key', string.upper)
-  def __getitem__(self, key):
-    if len(self._storage_[key]) > 0:
-      return self._storage_[key][0]
-    return None
-
-  def iteritems(self):
-    for k, l in self._storage_.iteritems():
-      for v in l:
-        yield k, v
-
 class FileLike(object):
   def __init__(self):
     pass
@@ -620,16 +677,22 @@ class HttpRequest(HttpMessage):
       value, options = cgi.parse_header(self.content_type)
       for field in _parse_multipart(self.body, **options):
         data, opts = field
-        print field
-        if 'filename' in opts:
-          print " ->>> FILE <<<- "
-        # print "PART:", field
-
+        #print "FIELD :", field, opts
+        try:
+          cd = opts.get('Content-Disposition') # should be present, was checked in _parse_multipart
+          name = cd['opts']['name']
+          is_file = 'filename' in cd['opts']
+        except Exception as err:
+          raise Http4xx(400,"Boo !")
+        if is_file:
+          self.files[name] = data
+        else:
+          self.post[name] = data
       # notes to myself :
       #  - try to keep all data in body (especially large blobs)
       # ~~~ POST/body (multipart) ~~~
       #    by storing offset to variables in FILES array (access wrappers ?)
-    else:
+    else: # not a multi-part -> form !
       # split data from body into POST vars
       for k, v in _tokenize_query_str(self.get_body(), probe=True):
         self.post[k] = v

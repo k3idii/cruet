@@ -147,6 +147,7 @@ def handle3(ctx):
   s = '\n\n'.join([
     'GET:{0}'.format(repr(ctx.request.get)),
     'POST:{0}'.format(repr(ctx.request.post)),
+    'FILES:{0}'.format(repr(ctx.request.files)),
     'COOKIE:{0}'.format(repr(ctx.request.cookies)),
     'HEADERS:{0}'.format(str(ctx.request.headers))
   ])
