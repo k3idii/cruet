@@ -121,7 +121,7 @@ def http_status(code, message=None):
   return "{0} {1}".format(code, message)
 
 
-def str_to_env_key(name, extra_keys=None):
+def key_to_env_key(name, extra_keys=None):
   name = str(name).upper()
   if name.startswith("HTTP_") or (extra_keys and name in extra_keys):
     return name
@@ -161,7 +161,7 @@ class CaseInsensitiveEnv(object):
   def __getitem__(self, item):
     return self.get(item, None)
 
-  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  @fix_kwarg('key', key_to_env_key, _extra_keys)
   def get(self, key, default=None, require=False):
     val = self._env.get(key, None)
     if val is None:
@@ -170,11 +170,11 @@ class CaseInsensitiveEnv(object):
       return default
     return val
 
-  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  @fix_kwarg('key', key_to_env_key, _extra_keys)
   def has(self, key):
     return self._env.get(key) is not None
 
-  @fix_kwarg('key', str_to_env_key, _extra_keys)
+  @fix_kwarg('key', key_to_env_key, _extra_keys)
   def check(self, key, val):
     cur_val = self.get(key, default=None)
     if cur_val is None:
@@ -245,49 +245,6 @@ class CaseInsensitiveMultiDict(MultiValDict):  # response headers container
   def _key_mod(self, k):
     return str(k).upper()
 
-
-class XoldCaseInsensitiveMultiDict(object):  # response headers container
-
-  _storage_ = None
-
-  def __init__(self, *a, **kw):
-    self._storage_ = dict()
-    if len(a) > 0:
-      if isinstance(a[0], dict):
-        for k, v in a[0].iteritems():
-          self[k] = v
-    else:
-      for k, v in kw.iteritems():
-        self[k] = v
-
-  @fix_kwarg('key', string.upper)
-  def get(self, key, mode=MULTIDICT_GET_ONE):
-    if len(self._storage_[key]) > 0:
-      if mode == MULTIDICT_GET_ONE:
-        return self._storage_[key][0]
-      elif mode == MULTIDICT_GET_ALL:
-        return self._storage_[key]
-    return None
-
-  @fix_kwarg('key', string.upper)
-  def __setitem__(self, key, value):
-    if key not in self._storage_:
-      self._storage_[key] = list()
-    self._storage_[key].append(value)
-
-  @fix_kwarg('key', string.upper)
-  def __getitem__(self, key):
-    if len(self._storage_[key]) > 0:
-      return self._storage_[key][0]
-    return None
-
-  def iteritems(self):
-    for k, l in self._storage_.iteritems():
-      for v in l:
-        yield k, v
-
-
-# useful stuff
 
 def _parse_multipart(fd, boundary=None):
   def boo(s=''):
