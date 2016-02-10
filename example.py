@@ -10,8 +10,6 @@ sauce.enable_auto_head_handler()
 sauce.enable_auto_range_handler()
 
 GET_POST = sauce.METHOD_GET + sauce.METHOD_POST
-
-
 #     ^- =  list + list
 
 # --------------------------------------------------------------------

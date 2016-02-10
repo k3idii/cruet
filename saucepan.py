@@ -127,6 +127,7 @@ def str_to_env_key(name, extra_keys=None):
     return name
   return "HTTP_" + name
 
+
 # decorator
 def fix_kwarg(kwarg_name, func, *func_a, **func_kw):  # <- so awesome !
   def _wrap1(f):
@@ -194,6 +195,7 @@ class CaseInsensitiveEnv(object):
 MULTIDICT_GET_ONE = 1
 MULTIDICT_GET_ALL = 2
 
+
 class MultiValDict(object):  # response headers container
   _storage_ = None
   _key_mod = None
@@ -244,7 +246,7 @@ class CaseInsensitiveMultiDict(MultiValDict):  # response headers container
     return str(k).upper()
 
 
-class oldCaseInsensitiveMultiDict(object):  # response headers container
+class XoldCaseInsensitiveMultiDict(object):  # response headers container
 
   _storage_ = None
 
@@ -285,16 +287,11 @@ class oldCaseInsensitiveMultiDict(object):  # response headers container
         yield k, v
 
 
-
-
-
 # useful stuff
 
 def _parse_multipart(fd, boundary=None):
-  _CHUNK_SIZE = 1024
-
   def boo(s=''):
-    print "FAIL !",s
+    print "FAIL !", s
     raise Http4xx(httplib.BAD_REQUEST, "Invalid Multipart/" + s)
 
   # print "BOUNDARY : ", boundary
@@ -306,7 +303,7 @@ def _parse_multipart(fd, boundary=None):
   close_delimiter_marker = '--'
 
   ln = fd.readline().strip()
-  #print `ln`,`delimiter`
+  # print `ln`,`delimiter`
   if ln != delimiter:
     boo('invalid data - not delimiter')
 
@@ -316,28 +313,28 @@ def _parse_multipart(fd, boundary=None):
 
     while True:
       ln = fd.readline().strip()
-      #print " -> Line : ", ln
+      # print " -> Line : ", ln
       if ln == '':
         # print " -> EMPTY ! <- "
         break
-      name, data = ln.split(": ",1)
+      name, data = ln.split(": ", 1)
       val, opts = cgi.parse_header(data)
       # print "--> HEADERS :", name,' : ', val,' ; ', opts
-      meta[name] = {'value':val, 'opts':opts}
+      meta[name] = {'value': val, 'opts': opts}
       # entry_meta.append({'name':name, 'value':val, 'opts':opts})
     offset = fd.tell()
     # print "DATA AT OFFSET : ", offset
 
-    if meta.get('Content-Disposition',None) is None:
+    if meta.get('Content-Disposition', None) is None:
       boo('No Content-Disposition!')
 
     r = ''
     while True:
       chunk = fd.readline()
       if chunk == '':
-        #print "WTF"
+        # print "WTF"
         return
-      #rint "CHUNK = ",`chunk`
+      # rint "CHUNK = ",`chunk`
       if chunk.startswith(delimiter):
         # r = 'some data'
         yield r.strip(), meta
@@ -349,9 +346,9 @@ def _parse_multipart(fd, boundary=None):
       else:
         r += chunk
 
-
   yield "YO LO"
   print "PARSING SHIT"
+
 
 def _read_iter_blocks(read_fn, size, block_size=2048):
   while True:
@@ -367,7 +364,6 @@ def _read_iter_blocks(read_fn, size, block_size=2048):
 
 
 def _read_iter_chunks(read_fn, max_size):
-
   def _read_till(fn, stop_at='\n', max_bytes=10):
     b = ''
     n = 0
@@ -388,7 +384,6 @@ def _read_iter_chunks(read_fn, max_size):
         max_bytes -= 1
 
   def _read_next_chunk_start(fn, sep=';'):
-    n = 0
     buf, num_read = _read_till(fn, "\n")
     if sep in buf:
       size, extension = buf.strip().split(sep, 1)
@@ -549,9 +544,11 @@ class DictAsObject(dict):  # prototype for settings ?
   def __setattr__(self, key, value):
     return self.__setitem__(key, value)
 
+
 class FileLike(object):
   def __init__(self):
     pass
+
 
 class HttpMessage(object):  # bare meta-object
   headers = {}
@@ -564,11 +561,12 @@ class HttpMessage(object):  # bare meta-object
     self.env = env
     self.on_init()
 
-  def on_init(self): # called automatically by init, just to skip __init__ overriding
+  def on_init(self):  # called automatically by init, just to skip __init__ overriding
     pass
 
-  def prepare(self): # called manually by owner
+  def prepare(self):  # called manually by owner
     pass
+
 
 class HttpRequest(HttpMessage):
   files = None
@@ -633,7 +631,7 @@ class HttpRequest(HttpMessage):
       max_body_size = self.content_length
     try:  # re-parse body, fill BytesIO ;-)
       fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
-      print "Reader : ",fn,   max_body_size
+      print "Reader : ", fn, max_body_size
       for block in fn(self.wsgi_input.read, max_body_size):
         self.body.write(block)
       self.body.seek(0)
@@ -677,22 +675,22 @@ class HttpRequest(HttpMessage):
       value, options = cgi.parse_header(self.content_type)
       for field in _parse_multipart(self.body, **options):
         data, opts = field
-        #print "FIELD :", field, opts
+        # print "FIELD :", field, opts
         try:
-          cd = opts.get('Content-Disposition') # should be present, was checked in _parse_multipart
+          cd = opts.get('Content-Disposition')  # should be present, was checked in _parse_multipart
           name = cd['opts']['name']
           is_file = 'filename' in cd['opts']
         except Exception as err:
-          raise Http4xx(400,"Boo !")
+          raise Http4xx(400, "Boo !" + str(err))
         if is_file:
           self.files[name] = data
         else:
           self.post[name] = data
-      # notes to myself :
-      #  - try to keep all data in body (especially large blobs)
-      # ~~~ POST/body (multipart) ~~~
-      #    by storing offset to variables in FILES array (access wrappers ?)
-    else: # not a multi-part -> form !
+          # notes to myself :
+          #  - try to keep all data in body (especially large blobs)
+          # ~~~ POST/body (multipart) ~~~
+          #    by storing offset to variables in FILES array (access wrappers ?)
+    else:  # not a multi-part -> form !
       # split data from body into POST vars
       for k, v in _tokenize_query_str(self.get_body(), probe=True):
         self.post[k] = v
@@ -859,7 +857,6 @@ class AbstractRouter(object):
     logging.warning("No valid route found ! Try default ...")
     self._default_route(ctx)
     return ctx
-
 
 #
 # -------------- 'Default' Router class  -----
@@ -1157,7 +1154,7 @@ class CookingPot(object):
 
   def add_exception_handler(self, ex_type, fn, **kw):
     self._exception_handlers.append(
-        dict(ex_type=ex_type, handler=fn, kwargs=kw)
+      dict(ex_type=ex_type, handler=fn, kwargs=kw)
     )
 
   def route(self, testable, **kw):
@@ -1182,8 +1179,8 @@ class CookingPot(object):
   def wsgi_handler(self, environ, start_response):
     logging.debug('WSGI handler called ...')
     exc_info = None
-    #import pprint
-    #pprint.pprint(environ)
+    # import pprint
+    # pprint.pprint(environ)
     ctx = TheContext(self.settings, environ)
     try:
       # one will say that is insane, but it handle the situation that
@@ -1357,7 +1354,6 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
 def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
   pan.add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
 
-
 # expose in globals, so we can use @decorator
 route = pan.route
 
@@ -1368,7 +1364,6 @@ def _wsgi_handler(environ, start_response):
 
 def wsgi_interface():
   return _wsgi_handler
-
 
 # expose WSGI handler
 application = wsgi_interface()
