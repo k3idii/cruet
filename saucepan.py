@@ -12,7 +12,7 @@ import json
 import os
 import os.path
 import io
-import string
+#import string
 
 import cgi
 
@@ -397,38 +397,7 @@ def _tokenize_query_str(s, probe=True, eq_char='=', sep_char='&'):
       pass
 
 
-def _parse_range(value, max_len=-1):
-  # http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.12
-  # The only range unit defined by HTTP/1.1 is "bytes".
-  range_str_bytes = 'bytes='
-  if range_str_bytes not in value:
-    raise Exception("Invalid 'range' header syntax !")
-  _, value = value.split(range_str_bytes, 1)
-  r = []
-  for rng in value.split(","):
-    if '-' not in rng:
-      raise HttpProtocolError("Invalid 'range' header syntax!")
-    a, b = rng.split('-')
-    if a == '' and b == '':
-      raise HttpProtocolError("Invalid 'range' header syntax!")
-    if a == '':
-      a = 0
-    else:
-      a = int(a)
-    if b == '':
-      b = max_len
-    else:
-      b = int(b)
-    if max_len > 0:
-      if a > max_len:
-        a = max_len
-      if b > max_len:
-        b = max_len
-    if b > 0:  # handle -1 as unknown 'end' of data
-      if a > b:
-        raise HttpProtocolError("Invalid 'range' header syntax !")
-    r.append([a, b])
-  return r
+
 
 
 #
@@ -790,7 +759,7 @@ class AbstractRouter(object):
   def setup(self):
     pass
 
-  def _pre_process(self, kw):
+  def _pre_process(self, testable, kw):
     return kw
 
   def _default_route(self, ctx, **kw):
@@ -798,9 +767,8 @@ class AbstractRouter(object):
       self.default(ctx, **kw)
 
   def add_entry(self, testable, **kw):
-    logging.debug("Adding new route [testable={0:s}] ".format(str(testable)))
-    kw['testable'] = testable
-    self._routes.append(self._pre_process(**kw))
+    logging.debug("Adding new route [testable={0:s}]".format(str(testable)))
+    self._routes.append(self._pre_process(testable, kw))
     pass
 
   @abstractmethod
@@ -819,6 +787,19 @@ class AbstractRouter(object):
 # -------------- 'Default' Router class  -----
 #
 
+class RoutableClass(object):
+  prefix = "do_"
+
+  def __init__(self):
+    pass
+
+  def __call__(self, ctx, method, *a, **kw):
+    func_name = self.prefix + method
+    func_ptr = getattr(self, func_name, None)
+    if func_ptr and callable(func_ptr):
+      return func_ptr(ctx, *a, **kw)
+    raise Exception("Fail to call method :" + str(method))
+
 
 # should we move this inside DefaultRouter class ??
 
@@ -829,6 +810,7 @@ ROUTE_CHECK_SIMPLE = 2
 ROUTE_CHECK_REGEX = 3
 ROUTE_CHECK_CALL = 4
 ROUTE_GENERATOR = 5
+ROUTE_CLASS = 6
 DEFAULT_ROUTE_TYPE = ROUTE_CHECK_SIMPLE
 ROUTE_ALWAYS = None  # <- special 'testable' value
 
@@ -837,6 +819,7 @@ METHOD_POST = ['POST']
 
 
 def _default_router_do_call(ctx, fn, a, kw):
+  print "CALL : ",ctx,a,kw
   data = fn(ctx, *a, **kw)
   if data:
     if ctx.response.body:
@@ -923,10 +906,11 @@ class DefaultRouter(AbstractRouter):
   def add_entry(self, testable=ROUTE_ALWAYS, **kw):  # add default testable value
     AbstractRouter.add_entry(self, testable, **kw)
 
-  def _pre_process(self, **kw):
+  def _pre_process(self, testable, kw):
     # TODO : this could return object with proper methods/values/etc
-    testable = kw.get('testable')  # <- required argument
-    target = kw.get('target', None)  # <- ref to func || None
+
+    kw['testable'] = testable
+    target = kw.get('target', None)
     route_type = kw.get('route_type', ROUTE_CHECK_UNDEF)
     if 'headers' not in kw:
       kw['headers'] = []
@@ -940,6 +924,13 @@ class DefaultRouter(AbstractRouter):
         item = key.split("_", 1)[1]
         kw['headers'].append((item, kw[key]))
         del kw[key]
+
+
+    if isinstance(target, type):
+      logging.debug("Creating instance of class ... ")
+      # kw['_class'] = target
+      kw['target'] = target()
+      # if route_type != ROUTE_CLASS
 
     if route_type == ROUTE_CHECK_UNDEF:
       logging.debug("Route type is not set. Guessing ...")
@@ -981,6 +972,7 @@ class DefaultRouter(AbstractRouter):
         if not ctx.request.headers.check(key, val):
           return False
     if _callable and callable(_callable):
+      logging.debug("ROUTER: calling {0:s}".format(str(_callable)))
       return _callable(ctx, **args)
     else:
       logging.error("Ouch! problem with _callable !")
@@ -1072,7 +1064,7 @@ class TheSettings(object):
       setattr(self, k, v)
 
 
-class CookingPot(object):
+class TheMainClass(object):
   """
    >>main<< class, glues everything ...
   """
@@ -1168,17 +1160,21 @@ class CookingPot(object):
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()
     body_writer = start_response(status, headers, exc_info)
-    if self._write_using_writer:
-      if callable(body_writer):
-        body_writer(ctx.response.body)
-        return ''
-      else:
-        return ctx.response.body
+    if self._write_using_writer and callable(body_writer):
+      body_writer(ctx.response.body)
+      return ['']
     else:
-      return ctx.response.body
+      return [ctx.response.body]
 
 
-pan = CookingPot()
+main_scope = TheMainClass()
+
+
+# expose in globals, so we can use @decorator
+route = main_scope.route
+hook = main_scope.hook
+add_route = main_scope.add_route
+handle_exception = main_scope.handle_exception
 
 
 # utils:
@@ -1188,7 +1184,6 @@ class MultipartElement(object):
   def __init__(self, content, fields=None):
     self.content = content
     self.fields = fields if fields else {}
-
 
 def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
   if marker is None:
@@ -1209,68 +1204,6 @@ def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
   body += '--' + marker + '--\n'
   ctx.response.headers[HEADER_CONTENT_TYPE] = 'multipart/{0:s}; boundary={1:s}'.format(mp_type, marker)
   ctx.response.body = body
-
-
-# plugin-like hooks,
-# disabled by default to allow faster processing ...
-
-
-def enable_auto_json():
-  # <-- move this to "extension package?"
-  # Why? not everybody need that ! It cause
-  @pan.hook(HOOK_PRE)
-  def _auto_json_pre(ctx):
-    ctx.do_auto_json = True
-
-  @pan.hook(HOOK_POST)
-  def _auto_json_post(ctx):
-    if not ctx.do_auto_json:
-      return
-    if isinstance(ctx.response.body, dict) or isinstance(ctx.response.body, list):
-      logging.debug('Apply auto JSON (in hook)')
-      body = json.dumps(ctx.response.body)
-      ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_JSON
-      ctx.response.body = body
-
-
-def enable_auto_head_handler():
-  @pan.hook(HOOK_POST)
-  def _handle_head(ctx):
-    if not ctx.request.verb == 'HEAD':
-      return
-    ctx.response.fix_content_length = False
-    ctx.response.headers[HEADER_CONTENT_LENGTH] = len(ctx.response.body)
-    ctx.response.body = ''
-
-
-def enable_auto_range_handler():  # <- do we need this ?
-  @pan.hook(HOOK_PRE)
-  def _handle_range_pre(ctx):
-    ctx.do_range = True
-
-  @pan.hook(HOOK_POST)
-  def _handle_range_post(ctx):
-    if not ctx.do_range:
-      return
-    header_value = ctx.request.headers.get(HEADER_RANGE)
-    if not header_value or len(header_value) == 0:
-      return
-    org_size = len(ctx.response.body)
-    ranges = _parse_range(header_value, max_len=org_size)
-    if not header_value or len(header_value) == 0:
-      return
-    ctx.response.set_status(httplib.PARTIAL_CONTENT)  # 206, avoid magic constant ;-)
-    if len(ranges) == 1:
-      a, b = ranges[0]
-      ctx.response.body = ctx.response.body[a:b]
-      ctx.response.headers[HEADER_CONTENT_RANGE] = 'bytes {0}-{1}/{2}'.format(a, b, org_size)
-      return
-    # else len > 1
-    parts = []
-    for ab in ranges:  # overlapping ranges ? we do not care ;-)
-      parts.append(MultipartElement(ctx.response.body[ab[0]:ab[1]]))
-    make_multipart(ctx, parts, 'byteranges')
-
 
 def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None, save_as=None, last=True):
   real_static = os.path.abspath(static_dir)
@@ -1309,21 +1242,18 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
 
 
 def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
-  pan.add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
+  add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
 
-# expose in globals, so we can use @decorator
-route = pan.route
+
 
 
 def _wsgi_handler(environ, start_response):
-  return pan.wsgi_handler(environ, start_response)
+  return main_scope.wsgi_handler(environ, start_response)
 
-
-def wsgi_interface():
-  return _wsgi_handler
 
 # expose WSGI handler
-application = wsgi_interface()
+application = _wsgi_handler
+
 
 
 def run(server_class=None, **opts):

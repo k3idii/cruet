@@ -2,19 +2,21 @@ import logging
 
 logging.basicConfig(level=logging.DEBUG)
 
-import saucepan as sauce
+import saucepan
+import plugins
 
-# <- enable additional processing
-sauce.enable_auto_json()
-sauce.enable_auto_head_handler()
-sauce.enable_auto_range_handler()
+plugins.plugin_auto_json(saucepan)
+plugins.plugin_auto_range_handler(saucepan)
+plugins.plugin_auto_range_handler(saucepan)
 
-GET_POST = sauce.METHOD_GET + sauce.METHOD_POST
+GET_POST = saucepan.METHOD_GET + saucepan.METHOD_POST
+
+
 #     ^- =  list + list
 
 # --------------------------------------------------------------------
 # classic add route (like bottle, converted to regex)
-@sauce.route('/hello/<name>', method=GET_POST, custom_param="Hello")
+@saucepan.route('/hello/<name>', method=GET_POST, custom_param="Hello")
 def handle(ctx, name=None, custom_param="Hi"):
   print ctx.request.headers.get('test', None)
   ctx.response.headers['test'] = 'Yes'
@@ -23,11 +25,11 @@ def handle(ctx, name=None, custom_param="Hi"):
 
 # --------------------------------------------------------------------
 # cookie example
-@sauce.route('/cookie')
+@saucepan.route('/cookie')
 def handle_cookies(ctx):
   cn = 'xxx'
   cc = ctx.cookie(cn)
-  nn = sauce.get_random_string(4)
+  nn = saucepan.get_random_string(4)
   ctx.cookie(cn, nn)
   ctx.cookie('static', 'value')
   return "Cookie [{0}] : current={1} next={2}".format(cn, cc, nn)
@@ -35,7 +37,7 @@ def handle_cookies(ctx):
 
 # --------------------------------------------------------------------
 # regex in route
-@sauce.route('/bye/(.)(.)(?P<str1>.*)/bye', route_type=sauce.ROUTE_CHECK_REGEX)
+@saucepan.route('/bye/(.)(.)(?P<str1>.*)/bye', route_type=saucepan.ROUTE_CHECK_REGEX)
 def handle_re(ctx, c1, c2, str1='none'):
   print "Hello from re-base route "
   return "HANDLE RE %s|%s|%s !" % (c1, c2, str1)
@@ -49,7 +51,7 @@ def my_route_tester(ctx):
   return False
 
 
-@sauce.route(my_route_tester)  # will auto detect type = ROUTER_CHECK_CALL
+@saucepan.route(my_route_tester)  # will auto detect type = ROUTER_CHECK_CALL
 def handle2(ctx, *args_from_tester):
   print "Hello from handle2"
   return "Handler 2 " + repr(args_from_tester)
@@ -57,7 +59,7 @@ def handle2(ctx, *args_from_tester):
 
 # --------------------------------------------------------------------
 # full string match (forced by route_type)
-@sauce.pan.route('/a/b/c', route_type=sauce.ROUTE_CHECK_STR)
+@saucepan.route('/a/b/c', route_type=saucepan.ROUTE_CHECK_STR)
 def handle3(ctx):
   ctx.response.headers['x-test'] = 1
   return {'this': 'will', "return": "JSON"}
@@ -76,22 +78,22 @@ def router_generator(ctx):
   return None
 
 
-sauce.pan.add_route(router_generator, route_type=sauce.ROUTE_GENERATOR)
+saucepan.add_route(router_generator, route_type=saucepan.ROUTE_GENERATOR)
 # ^--- also can to this using @decorator ;-)
 
 
 # --------------------------------------------------------------------
 # guess what ^_^
-sauce.register_static_file_handler(url_prefix='/static/')
+saucepan.register_static_file_handler(url_prefix='/static/')
 
 
 # --------------------------------------------------------------------
 # cookie example
-@sauce.route('/cookie')
+@saucepan.route('/cookie')
 def handle_cookies(ctx):
   cn = 'xxx'
   cc = ctx.cookie(cn)
-  nn = sauce.get_random_string(4)
+  nn = saucepan.get_random_string(4)
   ctx.cookie(cn, nn)
   ctx.cookie('static', 'value')
   return "Cookie [{0}] : current={1} next={2}".format(cn, cc, nn)
@@ -99,29 +101,27 @@ def handle_cookies(ctx):
 
 # --------------------------------------------------------------------
 # multipart answer >
-@sauce.pan.route("/multipart")
+@saucepan.route("/multipart")
 def do_multipart(ctx):
-  parts = []
-  parts.append(sauce.MultipartElement('test123'))
-  parts.append(sauce.MultipartElement('test123'))
-  return sauce.make_multipart(ctx, parts)
+  parts = [saucepan.MultipartElement('test123'), saucepan.MultipartElement('test123')]
+  return saucepan.make_multipart(ctx, parts)
 
 
 # --------------------------------------------------------------------
 # can do 302 by raising exception ;-)
-@sauce.pan.route("/redirect")
+@saucepan.route("/redirect")
 def do_302(ctx):
-  raise sauce.Http3xx("/destination")
+  raise saucepan.Http3xx("/destination")
 
 
-@sauce.pan.route("/destination")
+@saucepan.route("/destination")
 def do_dst(ctx):
   return 'Landed !'
 
 
 # --------------------------------------------------------------------
 # route that raise Exception ...
-@sauce.pan.route("/crash")
+@saucepan.route("/crash")
 def crash_it(ctx):
   if 1 + 1 == 2:
     raise Exception("Not real exception ...")
@@ -130,15 +130,15 @@ def crash_it(ctx):
 
 # --------------------------------------------------------------------
 # file upload demo
-@sauce.pan.route("/upload")
+@saucepan.route("/upload")
 def upl_route(ctx):
-  print ctx.request.headers._env
+  # print ctx.request.headers._env
   return "OK"
 
 
 # --------------------------------------------------------------------
 # full string match (forced by route_type)
-@sauce.pan.route('/form', route_type=sauce.ROUTE_CHECK_STR)
+@saucepan.route('/form', route_type=saucepan.ROUTE_CHECK_STR)
 def handle3(ctx):
   # for k,v in ctx.request.headers._env.iteritems():
   #  print `k`,`v`
@@ -161,14 +161,22 @@ def handle3(ctx):
 
 # --------------------------------------------------------------------
 # default route (ROUTE_ALWAYS == None == always match)
-@sauce.pan.route(sauce.ROUTE_ALWAYS)
+@saucepan.route("/funcs/<method>")
+class FuncsHandler(saucepan.RoutableClass):
+  def do_test(self, ctx):
+    return "Hai, I'm method !"
+
+
+# --------------------------------------------------------------------
+# default route (ROUTE_ALWAYS == None == always match)
+@saucepan.route(saucepan.ROUTE_ALWAYS)
 def default_route(ctx):
   return "Hello. This is default handler !"
 
 
 # --------------------------------------------------------------------
 # register exception handler (like route ^_^)
-@sauce.pan.handle_exception(Exception)
+@saucepan.handle_exception(Exception)
 def handle_exception1(ctx, err):
   print "Exception handler HIT !! : ", ctx, err
   import traceback
@@ -181,12 +189,12 @@ def handle_exception1(ctx, err):
 
 # --------------------------------------------------------------------
 # register exception handler (like route ^_^)
-@sauce.pan.hook(sauce.HOOK_POST, arg=2)
+@saucepan.hook(saucepan.HOOK_POST, arg=2)
 def post_hook_1(ctx, arg):
   ctx.response.headers['x-hooked-value'] = arg
 
 
 if __name__ == '__main__':
-  sauce.run(host='0.0.0.0', port=12345)
+  saucepan.run(host='0.0.0.0', port=12345)
 else:
-  application = sauce.wsgi_interface()
+  application = saucepan.application
