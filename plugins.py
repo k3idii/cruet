@@ -1,8 +1,8 @@
 import logging
 import json
 
-def plugin_auto_json(m):
 
+def plugin_auto_json(m):
   @m.hook(m.HOOK_PRE)
   def _auto_json_pre(ctx):
     ctx.do_auto_json = True
@@ -26,8 +26,6 @@ def plugin_auto_head_handler(m):
     ctx.response.fix_content_length = False
     ctx.response.headers[m.HEADER_CONTENT_LENGTH] = len(ctx.response.body)
     ctx.response.body = ''
-
-
 
 
 def plugin_auto_range_handler(m):

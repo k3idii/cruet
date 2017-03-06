@@ -12,13 +12,12 @@ import json
 import os
 import os.path
 import io
-#import string
+# import string
 
 import cgi
 
 from Cookie import SimpleCookie as CookiesDefaultContainer
 from Cookie import Morsel as CookiesDefaultElement
-
 
 # is this present on al os ?
 import mimetypes
@@ -397,9 +396,6 @@ def _tokenize_query_str(s, probe=True, eq_char='=', sep_char='&'):
       pass
 
 
-
-
-
 #
 # -------------- generic server snap-in  -----
 #
@@ -665,6 +661,7 @@ class HttpResponse(HttpMessage):
   cookies = None
   headers = None
   fix_content_length = True
+
   # http_version = '' <- will not be used ?
 
   def prepare(self):
@@ -783,6 +780,7 @@ class AbstractRouter(object):
     self._default_route(ctx)
     return ctx
 
+
 #
 # -------------- 'Default' Router class  -----
 #
@@ -819,7 +817,7 @@ METHOD_POST = ['POST']
 
 
 def _default_router_do_call(ctx, fn, a, kw):
-  print "CALL : ",ctx,a,kw
+  print "CALL : ", ctx, a, kw
   data = fn(ctx, *a, **kw)
   if data:
     if ctx.response.body:
@@ -924,7 +922,6 @@ class DefaultRouter(AbstractRouter):
         item = key.split("_", 1)[1]
         kw['headers'].append((item, kw[key]))
         del kw[key]
-
 
     if isinstance(target, type):
       logging.debug("Creating instance of class ... ")
@@ -1169,7 +1166,6 @@ class TheMainClass(object):
 
 main_scope = TheMainClass()
 
-
 # expose in globals, so we can use @decorator
 route = main_scope.route
 hook = main_scope.hook
@@ -1184,6 +1180,7 @@ class MultipartElement(object):
   def __init__(self, content, fields=None):
     self.content = content
     self.fields = fields if fields else {}
+
 
 def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
   if marker is None:
@@ -1204,6 +1201,7 @@ def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
   body += '--' + marker + '--\n'
   ctx.response.headers[HEADER_CONTENT_TYPE] = 'multipart/{0:s}; boundary={1:s}'.format(mp_type, marker)
   ctx.response.body = body
+
 
 def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None, save_as=None, last=True):
   real_static = os.path.abspath(static_dir)
@@ -1245,15 +1243,12 @@ def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
   add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
 
 
-
-
 def _wsgi_handler(environ, start_response):
   return main_scope.wsgi_handler(environ, start_response)
 
 
 # expose WSGI handler
 application = _wsgi_handler
-
 
 
 def run(server_class=None, **opts):
