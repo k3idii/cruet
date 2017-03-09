@@ -10,8 +10,6 @@ plugins.plugin_auto_range_handler(saucepan)
 plugins.plugin_auto_range_handler(saucepan)
 
 GET_POST = saucepan.METHOD_GET + saucepan.METHOD_POST
-
-
 #     ^- =  list + list
 
 # --------------------------------------------------------------------
@@ -111,8 +109,11 @@ def do_multipart(ctx):
 # can do 302 by raising exception ;-)
 @saucepan.route("/redirect")
 def do_302(ctx):
-  raise saucepan.Http3xx("/destination")
+  raise saucepan.Http3xx(302, target="/destination")
 
+@saucepan.route("/404")
+def do_404(ctx):
+  raise saucepan.Http4xx(404)
 
 @saucepan.route("/destination")
 def do_dst(ctx):
@@ -188,8 +189,8 @@ def handle_exception1(ctx, err):
 
 
 # --------------------------------------------------------------------
-# register exception handler (like route ^_^)
-@saucepan.hook(saucepan.HOOK_POST, arg=2)
+#
+@saucepan.hook(saucepan.HOOK_AFTER, arg=2)
 def post_hook_1(ctx, arg):
   ctx.response.headers['x-hooked-value'] = arg
 

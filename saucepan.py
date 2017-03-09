@@ -475,11 +475,9 @@ class FileLike(object):
 class HttpMessage(object):  # bare meta-object
   headers = {}
   body = None
-  settings = None
   env = None
 
-  def __init__(self, settings, env):
-    self.settings = settings
+  def __init__(self, env):
     self.env = env
     self.on_init()
 
@@ -563,7 +561,7 @@ class HttpRequest(HttpMessage):
     # MOVE THIS TO LAZY METHODS
     cookie_str = self.env.get('HTTP_COOKIE', None)
     if cookie_str:
-      tmp = self.settings.cookies_container_class(cookie_str)
+      tmp = SETTINGS.cookies_container_class(cookie_str)
       for c in tmp.values():
         self.cookies[c.key] = c.value
     # GET
@@ -631,7 +629,7 @@ class HttpRequest(HttpMessage):
   def xcookies(self):
     cookie_str = self.env.get('HTTP_COOKIE', None)
     if cookie_str:
-      self.cookies = self.settings.cookies_container_class(cookie_str)
+      self.cookies = SETTINGS.cookies_container_class(cookie_str)
     else:
       self.cookies = None
     return self.cookies
@@ -666,8 +664,8 @@ class HttpResponse(HttpMessage):
 
   def prepare(self):
     self.headers = CaseInsensitiveMultiDict()
-    self.cookies = self.settings.cookies_container_class()
-    for k, v in self.settings.default_headers:
+    self.cookies = SETTINGS.cookies_container_class()
+    for k, v in SETTINGS.default_headers:
       self.headers[k] = v
 
   def set_status(self, code, message=None):
@@ -722,11 +720,10 @@ class HttpResponse(HttpMessage):
 
 
 class TheContext(object):
-  def __init__(self, settings, env):
-    self.settings = settings
+  def __init__(self, env):
     self.env = env
-    self.request = HttpRequest(settings, env)
-    self.response = HttpResponse(settings, env)  # version=self.request.version)
+    self.request = HttpRequest(env)
+    self.response = HttpResponse(env)  # version=self.request.version)
 
   def prepare(self):
     self.request.prepare()
@@ -978,43 +975,36 @@ class DefaultRouter(AbstractRouter):
 # 3xx and 4xx "exceptions",
 # use them to stop function execution and return proper http answer
 
-# TODO: merge them to HttpEndNow(code,message,...) ?
-# this would allow user to raise httpEnd(200) to stop processing in middle of nowhere
+# this would allow user to raise HttpEndNow(200) to stop processing in middle of nowhere
 # not only 3xx and 4xx
 
-class Http3xx(Exception):
-  def __init__(self, target, code=httplib.MOVED_PERMANENTLY):
-    Exception.__init__(self, "HTTP Redirect")
-    self.target = target
-    self.code = code
+class HttpEndNow(Exception):
+  code = httplib.OK
+  def __init__(self, code=None, **kw):
+    Exception.__init__(self, "HTTP End Processing")
+    if code is not None:
+      self.code = code
+    self.kw = kw
+
+  def do_handle(self, ctx):
+    ctx.response.status_code = self.code
+    return self.gracefull_handle(ctx, **self.kw)
+
+  def gracefull_handle(self, ctx, **_):
+    pass
 
 
-class Http4xx(Exception):
-  def __init__(self, code, info=None):
-    if info is None:
-      info = get_default_http_message(code)
-    if info is None:
-      info = "Error"
-    Exception.__init__(self, "HTTP Error: {0:d} {1:s}".format(code, info))
-    self.code = code
-    self.info = info
+class Http3xx(HttpEndNow):
+  def gracefull_handle(self, ctx, target='/'):
+    ctx.response.headers[HEADER_LOCATION] = target
+    ctx.response.body = 'Moved to <a href="{0:s}">{0:s}</a> '.format(target)
 
-
-# 3xx and 4xx handlers
-
-def http_4xx_handler(ctx, error):
-  ctx.response.set_status(error.code, error.info)
-  return "{0:d} : {1:s}".format(error.code, error.info)
-
-
-def http_3xx_handler(ctx, error):
-  ctx.response.set_status(error.code)
-  ctx.response.headers[HEADER_LOCATION] = error.target
-  return '<a href="{0:s}">Moved : {0:s}</a>'.format(error.target)
+class Http4xx(HttpEndNow):
+  def gracefull_handle(self, ctx, **_):
+    ctx.response.body = 'Error {0:d}'.format(self.code)
 
 
 # Exception handlers :
-
 def _silent_error_handler(ctx, _):
   ctx.response.headers[HEADER_CONTENT_TYPE] = CONTENT_HTML
   return "500: server fail !"
@@ -1038,27 +1028,20 @@ def _default_request_handler(ctx):
   return "Not found!"
 
 
-HOOK_PRE = 'pre'
-HOOK_POST = 'post'
-POSSIBLE_HOOKS = [HOOK_PRE, HOOK_POST]
+HOOK_BEFORE = 'pre'
+HOOK_AFTER = 'post'
+POSSIBLE_HOOKS = [HOOK_BEFORE, HOOK_AFTER]
 
 
-class TheSettings(object):
-  cookies_container_class = CookiesDefaultContainer
-  cookies_element_class = CookiesDefaultElement
-  be_verbose = True
+SETTINGS = DictAsObject(
+  cookies_container_class = CookiesDefaultContainer,
+  cookies_element_class = CookiesDefaultElement,
+  be_verbose = True,
   default_headers = [
     [HEADER_CONTENT_TYPE, CONTENT_HTML],
     [HEADER_SERVER, '{0:s} (ver {1:s})'.format(SERVER_NAME, __version__)],
-  ]
-
-  def __init__(self, source=None):
-    if source:
-      self.load(source)
-
-  def load(self, source):  # import dict
-    for k, v in source.iteritems():
-      setattr(self, k, v)
+  ],
+)
 
 
 class TheMainClass(object):
@@ -1070,11 +1053,9 @@ class TheMainClass(object):
   _exception_handlers = []
   pre_hooks = []
   post_hooks = []
-  settings = None
 
-  def __init__(self, router_class=None, settings=None):
+  def __init__(self, router_class=None):
     logging.debug("Main object init")
-    self.settings = TheSettings(settings)
     if router_class:
       self.router = router_class()
     self.router.default = _default_request_handler
@@ -1085,9 +1066,9 @@ class TheMainClass(object):
 
     def _wrapper(f):
       entry = dict(func=f, args=a, kwargs=kw)
-      if h_type == HOOK_PRE:
+      if h_type == HOOK_BEFORE:
         self.pre_hooks.append(entry)
-      elif h_type == HOOK_POST:
+      elif h_type == HOOK_AFTER:
         self.post_hooks.append(entry)
 
     return _wrapper
@@ -1117,7 +1098,7 @@ class TheMainClass(object):
     for entry in self._exception_handlers:
       if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
-    if self.settings.be_verbose:
+    if SETTINGS.be_verbose :
       return _verbose_error_handler(ctx, error)
     else:
       return _silent_error_handler(ctx, error)
@@ -1127,7 +1108,7 @@ class TheMainClass(object):
     exc_info = None
     # import pprint
     # pprint.pprint(environ)
-    ctx = TheContext(self.settings, environ)
+    ctx = TheContext(environ)
     try:
       # one will say that is insane, but it handle the situation that
       # exception handler will fail somehow ....
@@ -1142,11 +1123,8 @@ class TheMainClass(object):
           if callable(_h['func']):
             logging.debug("Calling POST hook : {0:s}".format(str(_h)))
             _h['func'](ctx, *_h['args'], **_h['kwargs'])
-
-      except Http3xx as ex:
-        ctx.response.body = http_3xx_handler(ctx, ex)
-      except Http4xx as ex:
-        ctx.response.body = http_4xx_handler(ctx, ex)
+      except HttpEndNow as ex:
+        ex.do_handle(ctx)
       except Exception as ex:
         ctx.response.body = self._handle_error(ctx, ex)
     except Exception as epic_fail:

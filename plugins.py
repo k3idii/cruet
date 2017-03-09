@@ -3,11 +3,11 @@ import json
 
 
 def plugin_auto_json(m):
-  @m.hook(m.HOOK_PRE)
+  @m.hook(m.HOOK_BEFORE)
   def _auto_json_pre(ctx):
     ctx.do_auto_json = True
 
-  @m.hook(m.HOOK_POST)
+  @m.hook(m.HOOK_AFTER)
   def _auto_json_post(ctx):
     if not ctx.do_auto_json:
       return
@@ -19,7 +19,7 @@ def plugin_auto_json(m):
 
 
 def plugin_auto_head_handler(m):
-  @m.hook(m.HOOK_POST)
+  @m.hook(m.HOOK_AFTER)
   def _handle_head(ctx):
     if not ctx.request.verb == 'HEAD':
       return
@@ -29,11 +29,11 @@ def plugin_auto_head_handler(m):
 
 
 def plugin_auto_range_handler(m):
-  @m.hook(m.HOOK_PRE)
+  @m.hook(m.HOOK_BEFORE)
   def _handle_range_pre(ctx):
     ctx.do_range = True
 
-  @m.hook(m.HOOK_POST)
+  @m.hook(m.HOOK_AFTER)
   def _handle_range_post(ctx):
 
     def _parse_range(value, max_len=-1):
