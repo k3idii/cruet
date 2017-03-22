@@ -1,4 +1,3 @@
-import logging
 import json
 
 
@@ -12,7 +11,7 @@ def plugin_auto_json(m):
     if not ctx.do_auto_json:
       return
     if isinstance(ctx.response.body, dict) or isinstance(ctx.response.body, list):
-      logging.debug('Apply auto JSON (in hook)')
+      m.the_logger.debug('Apply auto JSON (in hook)')
       body = json.dumps(ctx.response.body)
       ctx.response.headers[m.HEADER_CONTENT_TYPE] = 'application/json'
       ctx.response.body = body
@@ -47,26 +46,26 @@ def plugin_auto_range_handler(m):
       for rng in value.split(","):
         if '-' not in rng:
           raise m.HttpProtocolError("Invalid 'range' header syntax!")
-        a, b = rng.split('-')
-        if a == '' and b == '':
+        begin, end = rng.split('-')
+        if begin == '' and end == '':
           raise m.HttpProtocolError("Invalid 'range' header syntax!")
-        if a == '':
-          a = 0
+        if begin == '':
+          begin = 0
         else:
-          a = int(a)
-        if b == '':
-          b = max_len
+          begin = int(begin)
+        if end == '':
+          end = max_len
         else:
-          b = int(b)
+          end = int(end)
         if max_len > 0:
-          if a > max_len:
-            a = max_len
-          if b > max_len:
-            b = max_len
-        if b > 0:  # handle -1 as unknown 'end' of data
-          if a > b:
+          if begin > max_len:
+            begin = max_len
+          if end > max_len:
+            end = max_len
+        if end > 0:  # handle -1 as unknown 'end' of data
+          if begin > end:
             raise m.HttpProtocolError("Invalid 'range' header syntax !")
-        r.append([a, b])
+        r.append([begin, end])
       return r
 
     if not ctx.do_range:

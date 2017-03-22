@@ -7,7 +7,6 @@ from collections import OrderedDict
 from abc import abstractmethod
 import re
 import time
-import logging
 import json
 import os
 import os.path
@@ -16,8 +15,8 @@ import io
 
 import cgi
 
-from Cookie import SimpleCookie as CookiesDefaultContainer
-from Cookie import Morsel as CookiesDefaultElement
+from Cookie import SimpleCookie as DefaultCookiesContainer
+from Cookie import Morsel as DefaultCookiesElement
 
 # is this present on al os ?
 import mimetypes
@@ -62,6 +61,37 @@ HTTP_CODES[431] = "Request Header Fields Too Large"
 
 HTTP_CODE_RANGES = {1: 'Continue', 2: 'Success', 3: 'Redirect', 4: 'Request Error', 5: 'Server Error'}
 
+# why -> cause logging is sloooow !
+LOG_DEBUG = 4
+LOG_INFO = 3
+LOG_WARN = 2
+LOG_ERROR = 1
+
+
+class TinyLogger(object):
+  level = LOG_DEBUG
+
+  def debug(self, a):
+    if self.level >= LOG_DEBUG:
+      print("DEBUG: {}".format(a))
+
+  def info(self, a):
+    if self.level >= LOG_INFO:
+      print("INFO: {}".format(a))
+
+  def warn(self, a):
+    if self.level >= LOG_WARN:
+      print("WARN: {}".format(a))
+
+  def error(self, a):
+    if self.level >= LOG_ERROR:
+      print("ERROR: {}".format(a))
+
+
+the_logger = TinyLogger()
+
+
+# </tiny logging>, one can replace the_logger w/ logging  ... will work ...
 
 class HttpProtocolError(Exception):  # raise on http-spec violation
   pass
@@ -438,7 +468,7 @@ class WSGIRefServer(GenericServer):
 
     srv_class = ref_srv.WSGIServer
     hnd_class = FixedHandler
-    logging.debug("Starting WSGIRef simple server on {0}:{1}".format(host, port))
+    the_logger.debug("Starting WSGIRef simple server on {0}:{1}".format(host, port))
     self.server = ref_srv.make_server(host, port, wsgi_app, srv_class, hnd_class)
     try:
       self.server.serve_forever()
@@ -761,7 +791,7 @@ class AbstractRouter(object):
       self.default(ctx, **kw)
 
   def add_entry(self, testable, **kw):
-    logging.debug("Adding new route [testable={0:s}]".format(str(testable)))
+    the_logger.debug("Adding new route [testable={0:s}]".format(str(testable)))
     self._routes.append(self._pre_process(testable, kw))
     pass
 
@@ -773,7 +803,7 @@ class AbstractRouter(object):
     for rt in self._routes:
       if self.try_route(ctx, **rt):
         return ctx
-    logging.warning("No valid route found ! Try default ...")
+    the_logger.warn("No valid route found ! Try default ...")
     self._default_route(ctx)
     return ctx
 
@@ -921,13 +951,13 @@ class DefaultRouter(AbstractRouter):
         del kw[key]
 
     if isinstance(target, type):
-      logging.debug("Creating instance of class ... ")
+      the_logger.debug("Creating instance of class ... ")
       # kw['_class'] = target
       kw['target'] = target()
       # if route_type != ROUTE_CLASS
 
     if route_type == ROUTE_CHECK_UNDEF:
-      logging.debug("Route type is not set. Guessing ...")
+      the_logger.debug("Route type is not set. Guessing ...")
       if testable is ROUTE_ALWAYS:
         route_type = ROUTE_CHECK_ALWAYS
       elif isinstance(testable, basestring):
@@ -941,7 +971,7 @@ class DefaultRouter(AbstractRouter):
         else:
           route_type = ROUTE_CHECK_CALL
       kw['route_type'] = route_type
-      logging.debug("Route type after guess: {0:d}".format(route_type))
+      the_logger.debug("Route type after guess: {0:d}".format(route_type))
     else:
       # "* Route type already set to :", route_type
       pass
@@ -966,10 +996,10 @@ class DefaultRouter(AbstractRouter):
         if not ctx.request.headers.check(key, val):
           return False
     if _callable and callable(_callable):
-      logging.debug("ROUTER: calling {0:s}".format(str(_callable)))
+      the_logger.debug("ROUTER: calling {0:s}".format(str(_callable)))
       return _callable(ctx, **args)
     else:
-      logging.error("Ouch! problem with _callable !")
+      the_logger.error("Ouch! problem with _callable !")
 
 
 # 3xx and 4xx "exceptions",
@@ -980,27 +1010,33 @@ class DefaultRouter(AbstractRouter):
 
 class HttpEndNow(Exception):
   code = httplib.OK
-  def __init__(self, code=None, **kw):
+  message = 'OK'
+
+  def __init__(self, code=None, message=None, **kw):
     Exception.__init__(self, "HTTP End Processing")
     if code is not None:
       self.code = code
+    if message is not None:
+      self.message = message
     self.kw = kw
 
   def do_handle(self, ctx):
     ctx.response.status_code = self.code
-    return self.gracefull_handle(ctx, **self.kw)
+    ctx.response.status_message = self.message
+    return self.gracefully_handle(ctx, **self.kw)
 
-  def gracefull_handle(self, ctx, **_):
+  def gracefully_handle(self, ctx, **_):
     pass
 
 
 class Http3xx(HttpEndNow):
-  def gracefull_handle(self, ctx, target='/'):
+  def gracefully_handle(self, ctx, target='/'):
     ctx.response.headers[HEADER_LOCATION] = target
     ctx.response.body = 'Moved to <a href="{0:s}">{0:s}</a> '.format(target)
 
+
 class Http4xx(HttpEndNow):
-  def gracefull_handle(self, ctx, **_):
+  def gracefully_handle(self, ctx, **_):
     ctx.response.body = 'Error {0:d}'.format(self.code)
 
 
@@ -1032,12 +1068,11 @@ HOOK_BEFORE = 'pre'
 HOOK_AFTER = 'post'
 POSSIBLE_HOOKS = [HOOK_BEFORE, HOOK_AFTER]
 
-
 SETTINGS = DictAsObject(
-  cookies_container_class = CookiesDefaultContainer,
-  cookies_element_class = CookiesDefaultElement,
-  be_verbose = True,
-  default_headers = [
+  cookies_container_class=DefaultCookiesContainer,
+  cookies_element_class=DefaultCookiesElement,
+  be_verbose=True,
+  default_headers=[
     [HEADER_CONTENT_TYPE, CONTENT_HTML],
     [HEADER_SERVER, '{0:s} (ver {1:s})'.format(SERVER_NAME, __version__)],
   ],
@@ -1055,7 +1090,7 @@ class TheMainClass(object):
   post_hooks = []
 
   def __init__(self, router_class=None):
-    logging.debug("Main object init")
+    the_logger.debug("Main object init")
     if router_class:
       self.router = router_class()
     self.router.default = _default_request_handler
@@ -1098,13 +1133,13 @@ class TheMainClass(object):
     for entry in self._exception_handlers:
       if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
-    if SETTINGS.be_verbose :
+    if SETTINGS.be_verbose:
       return _verbose_error_handler(ctx, error)
     else:
       return _silent_error_handler(ctx, error)
 
   def wsgi_handler(self, environ, start_response):
-    logging.debug('WSGI handler called ...')
+    the_logger.debug('WSGI handler called ...')
     exc_info = None
     # import pprint
     # pprint.pprint(environ)
@@ -1116,19 +1151,19 @@ class TheMainClass(object):
         ctx.prepare()
         for _h in self.pre_hooks:
           if callable(_h['func']):
-            logging.debug("Calling PRE hook : {0:s}".format(str(_h)))
+            the_logger.debug("Calling PRE hook : {0:s}".format(str(_h)))
             _h['func'](ctx, *_h['args'], **_h['kwargs'])
         self.router.select_route(ctx)
         for _h in self.post_hooks:
           if callable(_h['func']):
-            logging.debug("Calling POST hook : {0:s}".format(str(_h)))
+            the_logger.debug("Calling POST hook : {0:s}".format(str(_h)))
             _h['func'](ctx, *_h['args'], **_h['kwargs'])
       except HttpEndNow as ex:
         ex.do_handle(ctx)
       except Exception as ex:
         ctx.response.body = self._handle_error(ctx, ex)
     except Exception as epic_fail:
-      logging.error("EPIC FAIL : " + str(epic_fail))
+      the_logger.error("EPIC FAIL : " + str(epic_fail))
       ctx.response.body = "CRITICAL ERROR"
       ctx.response.set_status(httplib.INTERNAL_SERVER_ERROR)  # 500
     ctx.response.finish()
@@ -1184,7 +1219,7 @@ def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
 def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None, save_as=None, last=True):
   real_static = os.path.abspath(static_dir)
   real_path = os.path.abspath(os.path.join(static_dir, filename))
-  logging.debug("Try static file access : {0:s} ".format(real_path))
+  the_logger.debug("Try static file access : {0:s} ".format(real_path))
   if not real_path.startswith(real_static):
     raise Http4xx(httplib.FORBIDDEN)  # 403
   if not os.path.exists(real_path):
@@ -1221,25 +1256,21 @@ def register_static_file_handler(url_prefix='/static/', static_dir='./static/'):
   add_route(url_prefix + "(.*)", target=static_handler, static_dir=static_dir, route_type=ROUTE_CHECK_REGEX)
 
 
-def _wsgi_handler(environ, start_response):
-  return main_scope.wsgi_handler(environ, start_response)
-
-
 # expose WSGI handler
-application = _wsgi_handler
+application = main_scope.wsgi_handler
 
 
 def run(server_class=None, **opts):
-  logging.debug("Preparing WSGI server ... ")
+  the_logger.debug("Preparing WSGI server ... ")
   if server_class is None:
     server_class = WSGIRefServer
   handle = server_class(**opts)
-  logging.debug("Running server ... ")
-  handle.run(_wsgi_handler)
+  the_logger.debug("Running server ... ")
+  handle.run(application)
 
 
 if __name__ == '__main__':
-  logging.warn("Running standalone ?")
+  the_logger.warn("Running standalone ?")
   run()
 
   # end
