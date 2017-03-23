@@ -277,10 +277,9 @@ class CaseInsensitiveMultiDict(MultiValDict):  # response headers container
 
 def _parse_multipart(fd, boundary=None):
   def boo(s=''):
-    print "FAIL !", s
+    the_logger.debug("Multipart-FAIL ! {}".format(s))
     raise Http4xx(httplib.BAD_REQUEST, "Invalid Multipart/" + s)
 
-  # print "BOUNDARY : ", boundary
   if boundary is None:
     raise Exception("Need to guess boundary marker ... not yet implemented !")
   if 1 > len(boundary) > 69:  # rfc1341
@@ -550,7 +549,7 @@ class HttpRequest(HttpMessage):
     enc = self.headers.get('TRANSFER_ENCODING', '').lower()
     if 'chunk' in enc:  # well, it is so pro ;-)
       self.is_chunked = True
-      print "It is chunked !!!"
+      the_logger.debug("It is chunked !!!")
     l = self.env.get('CONTENT_LENGTH', None)
     if l is None or l == '':
       self.content_length = 0
@@ -581,12 +580,11 @@ class HttpRequest(HttpMessage):
       max_body_size = self.content_length
     try:  # re-parse body, fill BytesIO ;-)
       fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
-      print "Reader : ", fn, max_body_size
       for block in fn(self.wsgi_input.read, max_body_size):
         self.body.write(block)
       self.body.seek(0)
     except Exception as ex:
-      print "Problem @ read body ... ", str(ex), " silently pass ;-)"
+      the_logger.debug("Problem @ read body ... {} | {}".format(str(ex), " silently pass ;-)")
       pass  # TODO : should we crash ? or keep silent ?
     # MOVE THIS TO LAZY METHODS
     cookie_str = self.env.get('HTTP_COOKIE', None)
@@ -844,7 +842,7 @@ METHOD_POST = ['POST']
 
 
 def _default_router_do_call(ctx, fn, a, kw):
-  print "CALL : ", ctx, a, kw
+  the_logger.debug("Default router call ... ")
   data = fn(ctx, *a, **kw)
   if data:
     if ctx.response.body:
@@ -984,7 +982,6 @@ class DefaultRouter(AbstractRouter):
     if route_type == ROUTE_CHECK_SIMPLE:
       _tmp = re.sub(self._SIMPLE_RE_FIND, self._SIMPLE_RE_REPLACE, testable)
       kw['_re'] = re.compile(_tmp)
-    print kw
     return kw
 
   def try_route(self, ctx, _callable=None, headers=None, route_type=None, method=None, **args):
@@ -1141,8 +1138,6 @@ class TheMainClass(object):
   def wsgi_handler(self, environ, start_response):
     the_logger.debug('WSGI handler called ...')
     exc_info = None
-    # import pprint
-    # pprint.pprint(environ)
     ctx = TheContext(environ)
     try:
       # one will say that is insane, but it handle the situation that
