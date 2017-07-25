@@ -584,9 +584,9 @@ class HttpRequest(HttpMessage):
         self.body.write(block)
       self.body.seek(0)
     except Exception as ex:
-      the_logger.debug("Problem @ read body ... {} | {}".format(str(ex), " silently pass ;-)")
-      pass  # TODO : should we crash ? or keep silent ?
-    # MOVE THIS TO LAZY METHODS
+      the_logger.debug("Problem @ read body ... {} | {}".format(str(ex), " silently pass ;-)"))
+      #TODO : should we crash ? or keep silent ?
+    # TODO: MOVE THIS TO LAZY METHODS
     cookie_str = self.env.get('HTTP_COOKIE', None)
     if cookie_str:
       tmp = SETTINGS.cookies_container_class(cookie_str)
@@ -600,10 +600,6 @@ class HttpRequest(HttpMessage):
   def _parse_query_string(self):
     for k, v in _tokenize_query_str(self.query_string, probe=False):
       self.get[k] = v
-
-  def make_php_like_variables(self):
-    # your eyes will bleed, however ... 
-    pass
 
   def get_body(self):
     if self.content_length < 0:
