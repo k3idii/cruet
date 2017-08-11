@@ -73,19 +73,19 @@ class TinyLogger(object):
 
   def debug(self, a):
     if self.level >= LOG_DEBUG:
-      print("DEBUG: {}".format(a))
+      print("DEBUG: {0}".format(a))
 
   def info(self, a):
     if self.level >= LOG_INFO:
-      print("INFO: {}".format(a))
+      print("INFO: {0}".format(a))
 
   def warn(self, a):
     if self.level >= LOG_WARN:
-      print("WARN: {}".format(a))
+      print("WARN: {0}".format(a))
 
   def error(self, a):
     if self.level >= LOG_ERROR:
-      print("ERROR: {}".format(a))
+      print("ERROR: {0}".format(a))
 
 
 the_logger = TinyLogger()
@@ -106,7 +106,7 @@ class LazyProperty(property):
     self._func = func
     self.__doc__ = doc or func.__doc__
     self._name = func.__name__  # no extra 'name' as arg yet, useless
-    self._flag = "_got_{}".format(self._name)
+    self._flag = "_got_{0}".format(self._name)
 
   def __set__(self, instance, val):
     if _ALLOW_LAZY_PROPERTY_SET:
@@ -277,7 +277,7 @@ class CaseInsensitiveMultiDict(MultiValDict):  # response headers container
 
 def _parse_multipart(fd, boundary=None):
   def boo(s=''):
-    the_logger.debug("Multipart-FAIL ! {}".format(s))
+    the_logger.debug("Multipart-FAIL ! {0}".format(s))
     raise Http4xx(httplib.BAD_REQUEST, "Invalid Multipart/" + s)
 
   if boundary is None:
@@ -584,7 +584,7 @@ class HttpRequest(HttpMessage):
         self.body.write(block)
       self.body.seek(0)
     except Exception as ex:
-      the_logger.debug("Problem @ read body ... {} | {}".format(str(ex), " silently pass ;-)"))
+      the_logger.debug("Problem @ read body ... {0} | {1}".format(str(ex), " silently pass ;-)"))
       #TODO : should we crash ? or keep silent ?
     # TODO: MOVE THIS TO LAZY METHODS
     cookie_str = self.env.get('HTTP_COOKIE', None)
