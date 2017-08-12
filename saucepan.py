@@ -811,18 +811,21 @@ class AbstractRouter(object):
 
 
 #
-# -------------- 'Base' Router class  -----
+# -------------- 'Base' Routable class  (can be passed to router) -----
 #
 
 class RoutableClass(object):
   prefix = "do_"
+  default = None
 
   def __init__(self):
     pass
 
-  def __call__(self, ctx, method, *a, **kw):
+  def __call__(self, ctx, method=None, *a, **kw):
+    if method is None:
+      raise Exception("Method argument is missing")
     func_name = self.prefix + method
-    func_ptr = getattr(self, func_name, None)
+    func_ptr = getattr(self, func_name, self.default)
     if func_ptr and callable(func_ptr):
       return func_ptr(ctx, *a, **kw)
     raise Exception("Fail to call method :" + str(method))
@@ -1122,8 +1125,7 @@ class TheMainClass(object):
 
   def route(self, testable, **kw):
     def _wrapper(f):
-      self.add_route(testable, target=f, **kw)
-
+      self.router.add_entry(testable, target=f, **kw)
     return _wrapper
 
   def add_route(self, testable, target=None, **kw):

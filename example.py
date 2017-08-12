@@ -6,8 +6,6 @@ plugins.plugin_auto_range_handler(saucepan)
 plugins.plugin_auto_range_handler(saucepan)
 
 GET_POST = saucepan.METHOD_GET + saucepan.METHOD_POST
-
-
 #     ^- =  list + list
 
 # --------------------------------------------------------------------
@@ -161,15 +159,18 @@ def handle3(ctx):
 
 
 # --------------------------------------------------------------------
-# default route (ROUTE_ALWAYS == None == always match)
+# class wrapper, manditory argument: method name
 @saucepan.route("/funcs/<method>")
 class FuncsHandler(saucepan.RoutableClass):
+  def default(self, ctx):
+    return "You call bad func !"
+  
   def do_test(self, ctx):
     return "Hai, I'm method !"
 
 
 # --------------------------------------------------------------------
-# default route (ROUTE_ALWAYS == None == always match)
+# default route (ROUTE_ALWAYS == 'None' == always match)
 @saucepan.route(saucepan.ROUTE_ALWAYS)
 def default_route(ctx):
   return "Hello. This is default handler !"
@@ -179,10 +180,9 @@ def default_route(ctx):
 # register exception handler (like route ^_^)
 @saucepan.handle_exception(Exception)
 def handle_exception1(ctx, err):
-  print "Exception handler HIT !! : ", ctx, err
+  print("Exception handler HIT !! {0} / {1}: ".format(str(ctx),err))
   import traceback
   import sys
-
   info = sys.exc_info()
   traceback.print_exception(*info)  # <- send logs to admin ;-)
   return "Exception handled, do not panic !!!"
