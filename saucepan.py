@@ -30,6 +30,8 @@ DEFAULT_LISTEN_PORT = 8008
 
 MAX_CONTENT_SIZE = 1 * 1024 * 1024  # 1 MB
 
+INVALID_CONTENT_LEN = -1
+
 # ~~ const strings ~~
 
 SERVER_NAME = "SaucePan"
@@ -535,35 +537,38 @@ class HttpRequest(HttpMessage):
   wsgi_input = None
 
   def on_init(self):
-
     self.headers = CaseInsensitiveEnv(self.env)
-    self.verb = self.env.get('REQUEST_METHOD')
+    self.verb = self.env.get('REQUEST_METHOD','')
     self.method = self.verb  # You call it verb, I call it method
-    self.protocol = self.env.get('SERVER_PROTOCOL')
-    self.path = self.env.get('PATH_INFO')
-    self.host = self.env.get('HTTP_HOST')
-    self.query_string = self.env.get('QUERY_STRING')
-    self.content_type = self.env.get('CONTENT_TYPE')
+    self.protocol = self.env.get('SERVER_PROTOCOL','')
+    self.path = self.env.get('PATH_INFO','')
+    self.host = self.env.get('HTTP_HOST','')
+    self.query_string = self.env.get('QUERY_STRING','')
+    self.content_type = self.env.get('CONTENT_TYPE','')
     self.wsgi_input = self.env.get('wsgi.input')
     self.is_chunked = False
     enc = self.headers.get('TRANSFER_ENCODING', '').lower()
     if 'chunk' in enc:  # well, it is so pro ;-)
       self.is_chunked = True
       the_logger.debug("It is chunked !!!")
-    l = self.env.get('CONTENT_LENGTH', None)
-    if l is None or l == '':
-      self.content_length = 0
+    cl = self.env.get('CONTENT_LENGTH', None)
+    if cl is None or cl == '':
+      self.content_length = 0 # no header or empty header == 0
     else:
-      cl = int(l)
-      if cl < 1:
-        cl = 0
-      self.content_length = cl
+      try:
+        int_cl = int(cl)
+        if int_cl <= 0:
+          int_cl = INVALID_CONTENT_LEN
+        self.content_length = int_cl  
+      except Exception as err:
+        the_logger.debug("Fail to parse content-length: {0}".format(err))
+        self.content_length = INVALID_CONTENT_LEN
     self.body = io.BytesIO()
 
   def prepare(self):
     """
-      parse body, post, get, files and cookies.
-      IDEA/NOTE to myself/TODO: implement variables initialization as lazy properties so they will
+      parse body, POST params, GET params, files and cookies.
+      IDEA/NOTE to myself: implement variables initialization as lazy properties so they will
       be evaluated on first usage, not always !
       This should speed-up a little ...
     """
@@ -573,8 +578,8 @@ class HttpRequest(HttpMessage):
     self.files = {}
     # ~~~ BODY ~~~
 
-    max_body_size = MAX_CONTENT_SIZE
-    if self.content_length >= 0:
+    max_body_size = 0 # don't try to read in case of doubts
+    if self.content_length != INVALID_CONTENT_LEN:
       if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
         raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
       max_body_size = self.content_length
@@ -602,8 +607,11 @@ class HttpRequest(HttpMessage):
       self.get[k] = v
 
   def get_body(self):
-    if self.content_length < 0:
-      self.content_length = MAX_CONTENT_SIZE
+    if self.content_length == INVALID_CONTENT_LEN:
+      # self.content_length = MAX_CONTENT_SIZE
+      # ^-- this cused attenpt to read from empty fd .. don't !
+      # try to rescue the situation :
+      return ''
     self.body.seek(0)
     content = self.body.read(self.content_length)
     self.body.seek(0)
@@ -803,7 +811,7 @@ class AbstractRouter(object):
 
 
 #
-# -------------- 'Default' Router class  -----
+# -------------- 'Base' Router class  -----
 #
 
 class RoutableClass(object):
@@ -1264,6 +1272,3 @@ if __name__ == '__main__':
   the_logger.warn("Running standalone ?")
   run()
 
-  # end
-  # # TODO:
-  # # add support for middleware (pre-request | post-request)
