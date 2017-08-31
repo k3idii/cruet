@@ -816,17 +816,23 @@ class AbstractRouter(object):
 
 class RoutableClass(object):
   prefix = "do_"
+  method_variable = "method"
   default = None
 
   def __init__(self):
     pass
 
+  def always(self, ctx):
+    pass
+
   def __call__(self, ctx, method=None, *a, **kw):
+    method = kw.get(self.method_variable, None)
     if method is None:
-      raise Exception("Method argument is missing")
+      raise Exception("Method argument [{0}] is missing".format(self.method_variable))
     func_name = self.prefix + method
     func_ptr = getattr(self, func_name, self.default)
     if func_ptr and callable(func_ptr):
+      self.always(ctx, *a, **kw)
       return func_ptr(ctx, *a, **kw)
     raise Exception("Fail to call method :" + str(method))
 
