@@ -3,6 +3,7 @@
 *.py[cod]
 *.so
 *.log
+.vscode/
 local/
 
 

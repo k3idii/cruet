@@ -9,6 +9,7 @@ from abc import abstractmethod
 import re
 import time
 import json
+import binascii
 import os
 import os.path
 import io
@@ -63,6 +64,9 @@ HEADER_SET_COOKIE = 'Set-Cookie'
 # common headers values
 SAVE_AS_TPL = 'attachment; filename="{0:s}"'
 
+QUERY_STRING_SEP = '&'
+QUERY_STRING_EQ = '='
+
 CONTENT_JSON = 'application/json'
 CONTENT_HTML = 'text/html'
 CONTENT_PLAIN = 'text/plain'
@@ -104,8 +108,24 @@ class TinyLogger(object):
 
 the_logger = TinyLogger()
 
-
 # </tiny logging>, one can replace the_logger w/ logging  ... will work ...
+
+## If outside functions to speed things (one "if" less per call ;-)
+if is_python_3:
+  def __get_func_varnames(func):
+    return func.__code__.co_varnames
+  
+  def _is_string(param):
+    return isinstance(param, str)
+
+else:
+  def __get_func_varnames(func):
+      return func.func_code.co_varnames
+
+  def _is_string(param):
+    return isinstance(param, basestring)
+
+
 
 class HttpProtocolError(Exception):  # raise on http-spec violation
   pass
@@ -140,15 +160,9 @@ class LazyProperty(property):
     setattr(instance, self._flag, 1)
     return value
 
-def __get_func_varnames(func):
-  if is_python_3:
-    return func.__code__.co_varnames
-  else:
-    return func.func_code.co_varnames
-
 def get_random_string(size, encode='hex', factor=2):
   if encode:
-    return os.urandom(1 + size / factor).encode(encode)[:size]
+      return binascii.hexlify(os.urandom(int(1 + size / factor)))[:size]
   else:
     return os.urandom(size)
 
@@ -254,10 +268,10 @@ class MultiValDict(object):  # response headers container
     self._storage_ = dict()
     if len(a) > 0:
       if isinstance(a[0], dict):
-        for k, v in a[0].iteritems():
+        for k, v in a[0].items():
           self[k] = v
     else:
-      for k, v in kw.iteritems():
+      for k, v in kw.items():
         self[k] = v
 
   def get(self, key, default=None, mode=MULTIDICT_GET_ONE):
@@ -284,8 +298,8 @@ class MultiValDict(object):  # response headers container
       return self._storage_[key][0]
     return None
 
-  def iteritems(self):
-    for k, l in self._storage_.iteritems():
+  def items(self):
+    for k, l in self._storage_.items():
       for v in l:
         yield k, v
 
@@ -428,28 +442,22 @@ def _regex_get_args_kwargs(exp, mo):
       args.append(groups[i])
   return args, kwargs
 
+def _guess_str_is_querystring(s, qs_sep=QUERY_STRING_SEP, qs_eq=QUERY_STRING_EQ):
+  return qs_sep in s or qs_eq in s
 
-def _tokenize_query_str(s, probe=True, eq_char='=', sep_char='&'):
-  if probe:
-    tmp = s[:100]
-    if eq_char in tmp or sep_char in tmp:
-      pass  # ok !
-    else:
-      return  # None
-
-  for chunk in s.split(sep_char):
-    if eq_char in chunk:
-      yield chunk.split(eq_char, 1)
+def _tokenize_query_str(s, qs_sep=QUERY_STRING_SEP, qs_eq=QUERY_STRING_EQ):
+  for chunk in s.split(qs_sep):
+    if len(chunk) == 0:
+      pass
+    elif qs_eq in chunk:
+      yield chunk.split(qs_eq, 1)
     elif chunk and len(chunk) > 0:
       yield [chunk, None]
     else:
       pass
 
-
-#
 # -------------- generic server snap-in  -----
 #
-
 
 class GenericServer(object):
   """ Generic, bottle-compatible build-in server """
@@ -530,6 +538,7 @@ class HttpMessage(object):  # bare meta-object
   def __init__(self, env):
     self.env = env
     self.on_init()
+    self.body = ''
 
   def on_init(self):  # called automatically by init, just to skip __init__ overriding
     pass
@@ -622,14 +631,16 @@ class HttpRequest(HttpMessage):
     self._parse_body()
 
   def _parse_query_string(self):
-    for k, v in _tokenize_query_str(self.query_string, probe=False):
+    for k, v in _tokenize_query_str(self.query_string):
       self.get[k] = v
 
   def get_body(self):
     if self.content_length == INVALID_CONTENT_LEN:
       # self.content_length = MAX_CONTENT_SIZE
-      # ^-- this cused attenpt to read from empty fd .. don't !
+      # ^-- this cused attempt to read from empty fd .. don't !
       # try to rescue the situation :
+      return ''
+    if self.content_length == 0:
       return ''
     self.body.seek(0)
     content = self.body.read(self.content_length)
@@ -652,7 +663,7 @@ class HttpRequest(HttpMessage):
           name = cd['opts']['name']
           is_file = 'filename' in cd['opts']
         except Exception as err:
-          raise Http4xx(400, "Boo !" + str(err))
+          raise Http4xx(400, "Fail to process body of http request: " + str(err))
         if is_file:
           self.files[name] = data
         else:
@@ -662,9 +673,11 @@ class HttpRequest(HttpMessage):
           # ~~~ POST/body (multipart) ~~~
           #    by storing offset to variables in FILES array (access wrappers ?)
     else:  # not a multi-part -> form !
-      # split data from body into POST vars
-      for k, v in _tokenize_query_str(self.get_body(), probe=True):
-        self.post[k] = v
+      # split data from body into POST vars. TODO: handle this on first access to POST
+      str_body = self.get_body()
+      if _guess_str_is_querystring(str_body[:100]):  
+        for k, v in _tokenize_query_str(self.get_body()):
+          self.post[k] = v
 
   # @LazyPropertyWrapper(store=file_vars
   def xfiles(self):
@@ -709,6 +722,7 @@ class HttpResponse(HttpMessage):
   status_message = None
   cookies = None
   headers = None
+  body = ''
   fix_content_length = True
 
   # http_version = '' <- will not be used ?
@@ -728,13 +742,13 @@ class HttpResponse(HttpMessage):
 
   def get_headers(self):
     r = []
-    for k, v in self.headers.iteritems():
+    for k, v in self.headers.items():
       r.append((k.title(), str(v)))
     return r
 
   def old_get_headers(self):  # return Camel-Case headers + values as list[]
     resp = []
-    for k, v in self.headers.iteritems():
+    for k, v in self.headers.items():
       if isinstance(v, list):
         for vv in v:
           resp.append((k.title(), str(vv)))
@@ -750,7 +764,7 @@ class HttpResponse(HttpMessage):
       raise Exception('Cookie value to long')
     # c = self.settings.cookies_element_class()
     self.cookies[name] = value
-    for k, v in kw.iteritems():
+    for k, v in kw.items():
       self.cookies[name][k] = v
       # return c
 
@@ -768,6 +782,12 @@ class HttpResponse(HttpMessage):
     if self.fix_content_length:
       s = len(self.body)
       self.headers[HEADER_CONTENT_LENGTH] = str(s)
+
+  def get_body(self):
+    if is_python_3:
+      return self.body.encode()
+    else:
+      return self.body
 
 
 class TheContext(object):
@@ -990,7 +1010,7 @@ class DefaultRouter(AbstractRouter):
       the_logger.debug("Route type is not set. Guessing ...")
       if testable is ROUTE_ALWAYS:
         route_type = ROUTE_CHECK_ALWAYS
-      elif isinstance(testable, basestring):
+      elif _is_string(testable):
         if "<" in testable:
           route_type = ROUTE_CHECK_SIMPLE
         else:
@@ -1197,10 +1217,10 @@ class TheMainClass(object):
     status = ctx.response.get_status()
     body_writer = start_response(status, headers, exc_info)
     if self._write_using_writer and callable(body_writer):
-      body_writer(ctx.response.body)
+      body_writer(ctx.response.get_body())
       return ['']
     else:
-      return [ctx.response.body]
+      return [ctx.response.get_body()]
 
 
 main_scope = TheMainClass()
@@ -1233,7 +1253,7 @@ def make_multipart(ctx, parts, mp_type='form-data', marker=None, fields=None):
     body += '--' + marker + '\n'
     merged = fields.copy()
     merged.update(element.fields)
-    for k, v in merged.iteritems():
+    for k, v in merged.items():
       body += '{0:s}: {1:s}'.format(k, v)
     body += '\n'
     body += element.content + '\n'

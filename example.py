@@ -196,7 +196,7 @@ def handle_exception1(ctx, err):
 @saucepan.hook(saucepan.HOOK_BEFORE, arg=2)
 def post_hook_1(ctx, arg):
   """ hook executed before handler (i.e. preauth) """
-  print("HTTP Host == {0:s}".format(ctx.request.heders['Host']))
+  print("HTTP Host == {0:s}".format(ctx.request.headers['Host']))
 
 
 @saucepan.hook(saucepan.HOOK_AFTER, arg=2)
