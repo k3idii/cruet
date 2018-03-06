@@ -1,8 +1,9 @@
 # !/usr/bin/env python
 # -*- coding: utf-8 -*-
 #
+import sys
+is_python_3 = sys.version_info.major >= 3
 
-import httplib
 from collections import OrderedDict
 from abc import abstractmethod
 import re
@@ -15,8 +16,19 @@ import io
 
 import cgi
 
-from Cookie import SimpleCookie as DefaultCookiesContainer
-from Cookie import Morsel as DefaultCookiesElement
+
+if is_python_3 :
+  import http.client as http_base
+  from http.cookies import SimpleCookie as DefaultCookiesContainer
+  from http.cookies import Morsel as DefaultCookiesElement
+else:
+  import httplib as http_base
+  from Cookie import SimpleCookie as DefaultCookiesContainer
+  from Cookie import Morsel as DefaultCookiesElement
+
+
+
+
 
 # is this present on al os ?
 import mimetypes
@@ -55,7 +67,7 @@ CONTENT_JSON = 'application/json'
 CONTENT_HTML = 'text/html'
 CONTENT_PLAIN = 'text/plain'
 
-HTTP_CODES = httplib.responses.copy()
+HTTP_CODES = http_base.responses.copy()
 HTTP_CODES[418] = "I'm a teapot"  # RFC 2324
 HTTP_CODES[428] = "Precondition Required"
 HTTP_CODES[429] = "Too Many Requests"
@@ -128,6 +140,11 @@ class LazyProperty(property):
     setattr(instance, self._flag, 1)
     return value
 
+def __get_func_varnames(func):
+  if is_python_3:
+    return func.__code__.co_varnames
+  else:
+    return func.func_code.co_varnames
 
 def get_random_string(size, encode='hex', factor=2):
   if encode:
@@ -152,7 +169,7 @@ def http_status(code, message=None):
   return "{0} {1}".format(code, message)
 
 
-def key_to_env_key(name, extra_keys=None):
+def _keyname_to_httpkeyame(name, extra_keys=None):
   name = str(name).upper()
   if name.startswith("HTTP_") or (extra_keys and name in extra_keys):
     return name
@@ -162,16 +179,18 @@ def key_to_env_key(name, extra_keys=None):
 # decorator
 def fix_kwarg(kwarg_name, func, *func_a, **func_kw):  # <- so awesome !
   def _wrap1(f):
+    func_varnames = __get_func_varnames(f)
     def _wrap2(*a, **kw):
       if kwarg_name in kw:
         kw[kwarg_name] = func(kw[kwarg_name], *func_a, **func_kw)
       else:
-        idx = f.func_code.co_varnames.index(kwarg_name)
+        idx = func_varnames.index(kwarg_name)
         a = list(a)
         a[idx] = func(a[idx], *func_a, **func_kw)
       return f(*a, **kw)
 
-    if kwarg_name not in f.func_code.co_varnames:
+    if kwarg_name not in func_varnames:
+      print(func_varnames)
       raise Exception("{0} not in arg names of {1}".format(kwarg_name, str(f)))
     return _wrap2
 
@@ -192,7 +211,7 @@ class CaseInsensitiveEnv(object):
   def __getitem__(self, item):
     return self.get(item, None)
 
-  @fix_kwarg('key', key_to_env_key, _extra_keys)
+  @fix_kwarg('key', _keyname_to_httpkeyame, _extra_keys)
   def get(self, key, default=None, require=False):
     val = self._env.get(key, None)
     if val is None:
@@ -201,11 +220,11 @@ class CaseInsensitiveEnv(object):
       return default
     return val
 
-  @fix_kwarg('key', key_to_env_key, _extra_keys)
+  @fix_kwarg('key', _keyname_to_httpkeyame, _extra_keys)
   def has(self, key):
     return self._env.get(key) is not None
 
-  @fix_kwarg('key', key_to_env_key, _extra_keys)
+  @fix_kwarg('key', _keyname_to_httpkeyame, _extra_keys)
   def check(self, key, val):
     cur_val = self.get(key, default=None)
     if cur_val is None:
@@ -280,7 +299,7 @@ class CaseInsensitiveMultiDict(MultiValDict):  # response headers container
 def _parse_multipart(fd, boundary=None):
   def boo(s=''):
     the_logger.debug("Multipart-FAIL ! {0}".format(s))
-    raise Http4xx(httplib.BAD_REQUEST, "Invalid Multipart/" + s)
+    raise Http4xx(http_base.BAD_REQUEST, "Invalid Multipart/" + s)
 
   if boundary is None:
     raise Exception("Need to guess boundary marker ... not yet implemented !")
@@ -334,7 +353,7 @@ def _parse_multipart(fd, boundary=None):
         r += chunk
 
   yield "YO LO"
-  print "PARSING SHIT"
+  print("PARSING STUFF")
 
 
 def _read_iter_blocks(read_fn, size, block_size=2048):
@@ -385,7 +404,7 @@ def _read_iter_chunks(read_fn, max_size):
     max_size -= read_bytes
     # TODO: check if max_size > block_size !
     if block_size > max_size:
-      raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE, "Max body size exceed !")
+      raise Http4xx(http_base.REQUEST_ENTITY_TOO_LARGE, "Max body size exceed !")
     if block_size == 0:
       return  # TODO : read trailer
     else:
@@ -581,7 +600,7 @@ class HttpRequest(HttpMessage):
     max_body_size = 0 # don't try to read in case of doubts
     if self.content_length != INVALID_CONTENT_LEN:
       if self.content_length > MAX_CONTENT_SIZE:  # declared size too large ...
-        raise Http4xx(httplib.REQUEST_ENTITY_TOO_LARGE)
+        raise Http4xx(http_base.REQUEST_ENTITY_TOO_LARGE)
       max_body_size = self.content_length
     try:  # re-parse body, fill BytesIO ;-)
       fn = _read_iter_chunks if self.is_chunked else _read_iter_blocks
@@ -623,7 +642,7 @@ class HttpRequest(HttpMessage):
     self.files = {}
     # or check for application/x-www-form-urlencoded ?
     if 'multipart/' in self.content_type:
-      print self.get_body()
+      print("Multipart : {0}".format(self.get_body()))
       value, options = cgi.parse_header(self.content_type)
       for field in _parse_multipart(self.body, **options):
         data, opts = field
@@ -1019,7 +1038,7 @@ class DefaultRouter(AbstractRouter):
 # not only 3xx and 4xx
 
 class HttpEndNow(Exception):
-  code = httplib.OK
+  code = http_base.OK
   message = 'OK'
 
   def __init__(self, code=None, message=None, **kw):
@@ -1138,7 +1157,7 @@ class TheMainClass(object):
     self.router.add_entry(testable, target=target, **kw)
 
   def _handle_error(self, ctx, error):
-    ctx.response.set_status(httplib.INTERNAL_SERVER_ERROR)  # 500
+    ctx.response.set_status(http_base.INTERNAL_SERVER_ERROR)  # 500
     for entry in self._exception_handlers:
       if isinstance(error, entry['ex_type']):
         return entry['handler'](ctx, error, **entry['kwargs'])
@@ -1172,7 +1191,7 @@ class TheMainClass(object):
     except Exception as epic_fail:
       the_logger.error("EPIC FAIL : " + str(epic_fail))
       ctx.response.body = "CRITICAL ERROR"
-      ctx.response.set_status(httplib.INTERNAL_SERVER_ERROR)  # 500
+      ctx.response.set_status(http_base.INTERNAL_SERVER_ERROR)  # 500
     ctx.response.finish()
     headers = ctx.response.get_headers()
     status = ctx.response.get_status()
@@ -1228,13 +1247,13 @@ def static_handler(ctx, filename=None, static_dir='./', mime=None, encoding=None
   real_path = os.path.abspath(os.path.join(static_dir, filename))
   the_logger.debug("Try static file access : {0:s} ".format(real_path))
   if not real_path.startswith(real_static):
-    raise Http4xx(httplib.FORBIDDEN)  # 403
+    raise Http4xx(http_base.FORBIDDEN)  # 403
   if not os.path.exists(real_path):
-    raise Http4xx(httplib.NOT_FOUND)  # 404
+    raise Http4xx(http_base.NOT_FOUND)  # 404
   if not os.path.isfile(real_path):
-    raise Http4xx(httplib.NOT_FOUND)  # 404
+    raise Http4xx(http_base.NOT_FOUND)  # 404
   if not os.access(real_path, os.R_OK):
-    raise Http4xx(httplib.FORBIDDEN)  # 403
+    raise Http4xx(http_base.FORBIDDEN)  # 403
   if hasattr(ctx, 'do_auto_json'):
     ctx.do_auto_json = False  # <- skip processing
   if mime is None:

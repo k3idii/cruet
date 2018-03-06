@@ -6,75 +6,88 @@ plugins.plugin_auto_range_handler(saucepan)
 plugins.plugin_auto_range_handler(saucepan)
 
 GET_POST = saucepan.METHOD_GET + saucepan.METHOD_POST
+
 #     ^- =  list + list
 
 # --------------------------------------------------------------------
 # classic add route (like bottle, converted to regex)
-@saucepan.route('/hello/<name>', method=GET_POST, custom_param="Hello")
-def handle(ctx, name=None, custom_param="Hi"):
-  print ctx.request.headers.get('test', None)
-  ctx.response.headers['test'] = 'Yes'
-  return "{0:s} <b>{1:s}</b>".format(custom_param, name)
+@saucepan.route('/hello/<name>', method=GET_POST, custom_hello="Hello")
+def handle_simple(ctx, name=None, custom_hello="Hi"):
+  """ routing - simple handler w/ helloeter and one custom "static" hello
+  """
+  print("Hello {0:s}".format(ctx.request.headers.get('test', None)))
+  ctx.response.headers['XX-Custom-Header'] = str(name)
+  return "{0:s} <b>{1:s}</b>".format(custom_hello, name)
 
 
 # --------------------------------------------------------------------
 # cookie example
 @saucepan.route('/cookie')
 def handle_cookies(ctx):
-  cn = 'xxx'
-  cc = ctx.cookie(cn)
-  nn = saucepan.get_random_string(4)
-  ctx.cookie(cn, nn)
-  ctx.cookie('static', 'value')
-  return "Cookie [{0}] : current={1} next={2}".format(cn, cc, nn)
+  """ Cookie setter/getter
+  """
+  cookie_name = 'testcookie'
+  cookie_value = ctx.cookie(cookie_name)
+  rand_string = saucepan.get_random_string(4)
+  ctx.cookie(cookie_name, rand_string)
+  ctx.cookie('staticname', 'staticvalue')
+  return "Cookie [{0}] : current={1} next={2}".format(cookie_name, cookie_value, rand_string)
 
 
 # --------------------------------------------------------------------
 # regex in route
-@saucepan.route('/bye/(.)(.)(?P<str1>.*)/bye', route_type=saucepan.ROUTE_CHECK_REGEX)
+@saucepan.route('/regex/(.)(.)(?P<str1>.*)/abc', route_type=saucepan.ROUTE_CHECK_REGEX)
 def handle_re(ctx, c1, c2, str1='none'):
-  print "Hello from re-base route "
-  return "HANDLE RE %s|%s|%s !" % (c1, c2, str1)
+  """ RegEx-based router, catching goups and named groups """
+  print("Hello from RE-base route ")
+  return "Handling RE route %s|%s|%s !" % (c1, c2, str1)
 
 
 # --------------------------------------------------------------------
 # route tester as callback
 def my_route_tester(ctx):
-  if 'test2' in ctx.request.path:
+  """ return (true|fals) + arbitray nuber of paramteres that will be passed to handler"""
+  if 'function/' in ctx.request.path:
     return True, 'value 1', 'val two'
   return False
 
-
 @saucepan.route(my_route_tester)  # will auto detect type = ROUTER_CHECK_CALL
-def handle2(ctx, *args_from_tester):
-  print "Hello from handle2"
-  return "Handler 2 " + repr(args_from_tester)
+def handle_func(ctx, *args_from_tester):
+  """ Route dectision by function call (auto-detected), """
+  print("Hello from func-based route")
+  return "YAY! function returned true ! " + repr(args_from_tester)
 
 
 # --------------------------------------------------------------------
 # full string match (forced by route_type)
-@saucepan.route('/a/b/c', route_type=saucepan.ROUTE_CHECK_STR)
-def handle3(ctx):
-  ctx.response.headers['x-test'] = 1
+@saucepan.route('/str1/str2/str3', route_type=saucepan.ROUTE_CHECK_STR)
+def handle_strict(ctx):
+  """ strict string check, ad """
+  return "string /str1/str2/str3 match !"
+
+# --------------------------------------------------------------------
+# return JSON (for API's, etc)
+@saucepan.route('/json', route_type=saucepan.ROUTE_CHECK_STR)
+def handle_ret_json(ctx):
+  """ return JSON """
   return {'this': 'will', "return": "JSON"}
 
 
 # --------------------------------------------------------------------
 # Generator as route
 def router_generator(ctx):
-  def handle4(local_ctx):
-    print "Hello from generated function"
+  """ generator based routing """
+  def handle_generator(local_ctx):
+    print("Hello from generated function")
     local_ctx.response.headers['test'] = ['yes']
     return "Handler from generator !"
 
-  if ctx.request.headers.has('xxx'):
+  print("Hello from generator-based router !")
+  if "generator" in ctx.request.path or ctx.request.headers.has('generator'):
     return handle4
   return None
 
-
 saucepan.add_route(router_generator, route_type=saucepan.ROUTE_GENERATOR)
-# ^--- also can to this using @decorator ;-)
-
 
 # --------------------------------------------------------------------
 # guess what ^_^
@@ -82,21 +95,10 @@ saucepan.register_static_file_handler(url_prefix='/static/')
 
 
 # --------------------------------------------------------------------
-# cookie example
-@saucepan.route('/cookie')
-def handle_cookies(ctx):
-  cn = 'xxx'
-  cc = ctx.cookie(cn)
-  nn = saucepan.get_random_string(4)
-  ctx.cookie(cn, nn)
-  ctx.cookie('static', 'value')
-  return "Cookie [{0}] : current={1} next={2}".format(cn, cc, nn)
-
-
-# --------------------------------------------------------------------
 # multipart answer >
 @saucepan.route("/multipart")
 def do_multipart(ctx):
+  """ content-type:Multipart response """
   parts = [saucepan.MultipartElement('test123'), saucepan.MultipartElement('test123')]
   return saucepan.make_multipart(ctx, parts)
 
@@ -105,27 +107,26 @@ def do_multipart(ctx):
 # can do 302 by raising exception ;-)
 @saucepan.route("/redirect")
 def do_302(ctx):
+  """ 302 response code by exception """
   raise saucepan.Http3xx(302, target="/destination")
-
-
-@saucepan.route("/404")
-def do_404(ctx):
-  raise saucepan.Http4xx(404)
-
 
 @saucepan.route("/destination")
 def do_dst(ctx):
   return 'Landed !'
 
+@saucepan.route("/404")
+def do_404(ctx):
+  """ 404 response by exception """
+  raise saucepan.Http4xx(404)
 
 # --------------------------------------------------------------------
 # route that raise Exception ...
 @saucepan.route("/crash")
 def crash_it(ctx):
+  print("Will raise generic Exception if 1+1 == 2 ! ")
   if 1 + 1 == 2:
     raise Exception("Not real exception ...")
   return "OK"
-
 
 # --------------------------------------------------------------------
 # file upload demo
@@ -162,6 +163,7 @@ def handle3(ctx):
 # class wrapper, manditory argument: method name
 @saucepan.route("/funcs/<method>")
 class FuncsHandler(saucepan.RoutableClass):
+  """ class-based handler, assume 1st arg == method """
   def default(self, ctx):
     return "You call bad func !"
   
@@ -180,6 +182,7 @@ def default_route(ctx):
 # register exception handler (like route ^_^)
 @saucepan.handle_exception(Exception)
 def handle_exception1(ctx, err):
+  """ register exception handler for specific class of exception """
   print("Exception handler HIT !! {0} / {1}: ".format(str(ctx),err))
   import traceback
   import sys
@@ -187,12 +190,21 @@ def handle_exception1(ctx, err):
   traceback.print_exception(*info)  # <- send logs to admin ;-)
   return "Exception handled, do not panic !!!"
 
-
 # --------------------------------------------------------------------
 #
+
+@saucepan.hook(saucepan.HOOK_BEFORE, arg=2)
+def post_hook_1(ctx, arg):
+  """ hook executed before handler (i.e. preauth) """
+  print("HTTP Host == {0:s}".format(ctx.request.heders['Host']))
+
+
 @saucepan.hook(saucepan.HOOK_AFTER, arg=2)
 def post_hook_1(ctx, arg):
+  """ hook executed after handler """
+  print("Hook executed after handler")
   ctx.response.headers['x-hooked-value'] = arg
+
 
 
 if __name__ == '__main__':
