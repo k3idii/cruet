@@ -129,14 +129,6 @@ def crash_it(ctx):
   return "OK"
 
 # --------------------------------------------------------------------
-# file upload demo
-@saucepan.route("/upload")
-def upl_route(ctx):
-  # print ctx.request.headers._env
-  return "OK"
-
-
-# --------------------------------------------------------------------
 # full string match (forced by route_type)
 @saucepan.route('/form', route_type=saucepan.ROUTE_CHECK_STR)
 def handle3(ctx):
@@ -175,7 +167,27 @@ class FuncsHandler(saucepan.RoutableClass):
 # default route (ROUTE_ALWAYS == 'None' == always match)
 @saucepan.route(saucepan.ROUTE_ALWAYS)
 def default_route(ctx):
-  return "Hello. This is default handler !"
+  return """
+<html>
+<head><title>Examples</title></head>
+<body>
+<ul>
+<li><a href="/hello/your_name"> simple HelloWorld </a></li>
+<li><a href="/cookie"> Cookie </a></li>
+<li><a href="/regex/XYZZZZ/abc"> RegEx routing </a></li>
+<li><a href="/xx/function/yy"> Function-based routing </a></li>
+<li><a href="/str1/str2/str3"> Full str-match routing </a></li>
+<li><a href="/json"> return-a-json </a></li>
+<li><a href="/multipart"> return multipart </a></li>
+<li><a href="/redirect"> get 302 to /destination </a></li>
+<li><a href="/404"> well ... 404 </a></li>
+<li><a href="/crash"> Generate exception (handled gracefully) </a></li>
+<li><a href="/form"> POST/GET/Upload </a></li>
+<li><a href="/funcs/test"> Class/method-name based routing </a></li>
+</ul>
+</body>
+</html>
+  """
 
 
 # --------------------------------------------------------------------

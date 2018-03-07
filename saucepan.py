@@ -204,7 +204,6 @@ def fix_kwarg(kwarg_name, func, *func_a, **func_kw):  # <- so awesome !
       return f(*a, **kw)
 
     if kwarg_name not in func_varnames:
-      print(func_varnames)
       raise Exception("{0} not in arg names of {1}".format(kwarg_name, str(f)))
     return _wrap2
 
@@ -323,7 +322,6 @@ def _parse_multipart(fd, boundary=None):
   close_delimiter_marker = '--'
 
   ln = fd.readline().strip()
-  # print `ln`,`delimiter`
   if ln != delimiter:
     boo('invalid data - not delimiter')
 
@@ -653,7 +651,7 @@ class HttpRequest(HttpMessage):
     self.files = {}
     # or check for application/x-www-form-urlencoded ?
     if 'multipart/' in self.content_type:
-      print("Multipart : {0}".format(self.get_body()))
+      ## print("Multipart : {0}".format(self.get_body()))
       value, options = cgi.parse_header(self.content_type)
       for field in _parse_multipart(self.body, **options):
         data, opts = field
