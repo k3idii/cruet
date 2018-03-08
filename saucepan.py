@@ -13,7 +13,6 @@ import binascii
 import os
 import os.path
 import io
-# import string
 
 import cgi
 
@@ -26,9 +25,6 @@ else:
   import httplib as http_base
   from Cookie import SimpleCookie as DefaultCookiesContainer
   from Cookie import Morsel as DefaultCookiesElement
-
-
-
 
 
 # is this present on al os ?
@@ -124,7 +120,6 @@ else:
 
   def _is_string(param):
     return isinstance(param, basestring)
-
 
 
 class HttpProtocolError(Exception):  # raise on http-spec violation
@@ -383,22 +378,22 @@ def _read_iter_blocks(read_fn, size, block_size=2048):
 
 def _read_iter_chunks(read_fn, max_size):
   def _read_till(fn, stop_at='\n', max_bytes=10):
-    b = ''
+    buff = ''
     n = 0
     if max_bytes == -1:
       while True:
-        c = fn(1)
+        chunk = fn(1)
         n += 1
-        if c == stop_at:
-          return b, n
-        b += c
+        if chunk == stop_at:
+          return buff, n
+        buff += chunk
     else:
       while max_bytes > 0:
-        c = fn(1)
+        chunk = fn(1)
         n += 1
-        if c == stop_at:
-          return b, n
-        b += c
+        if chunk == stop_at:
+          return buff, n
+        buff += chunk
         max_bytes -= 1
 
   def _read_next_chunk_start(fn, sep=';'):
@@ -782,16 +777,13 @@ class HttpResponse(HttpMessage):
       self.headers[HEADER_CONTENT_LENGTH] = str(s)
 
   def get_body(self):
+    retval = self.body
+    if not _is_string(retval):
+      retval = str(retval)
     if is_python_3:
-      if isinstance(self.body, str):
-        return self.body.encode()
-      else:
-        return str(self.body).encode()
+      return retval.encode()
     else:
-      if isinstance(self.body, basestring):
-        return self.body
-      else:
-        return str(self.body)
+      return retval
 
 
 class TheContext(object):
@@ -812,8 +804,6 @@ class TheContext(object):
       self.response.set_cookie(name, *a, **kw)
       #                                   ^- pass value as 1st arg
 
-
-#
 # -------------- ROUTER  -----
 #
 
