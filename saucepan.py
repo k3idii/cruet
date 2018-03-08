@@ -783,9 +783,15 @@ class HttpResponse(HttpMessage):
 
   def get_body(self):
     if is_python_3:
-      return self.body.encode()
+      if isinstance(self.body, str):
+        return self.body.encode()
+      else:
+        return str(self.body).encode()
     else:
-      return self.body
+      if isinstance(self.body, basestring):
+        return self.body
+      else:
+        return str(self.body)
 
 
 class TheContext(object):
@@ -793,7 +799,7 @@ class TheContext(object):
     self.env = env
     self.request = HttpRequest(env)
     self.response = HttpResponse(env)  # version=self.request.version)
-
+   
   def prepare(self):
     self.request.prepare()
     self.response.prepare()
@@ -1113,7 +1119,7 @@ def _default_request_handler(ctx):
 
 HOOK_BEFORE = 'pre'
 HOOK_AFTER = 'post'
-POSSIBLE_HOOKS = [HOOK_BEFORE, HOOK_AFTER]
+AVAILABLE_HOOKS = [HOOK_BEFORE, HOOK_AFTER]
 
 SETTINGS = DictAsObject(
   cookies_container_class=DefaultCookiesContainer,
@@ -1135,6 +1141,7 @@ class TheMainClass(object):
   _exception_handlers = []
   pre_hooks = []
   post_hooks = []
+  extra_args = {}
 
   def __init__(self, router_class=None):
     the_logger.debug("Main object init")
@@ -1142,9 +1149,12 @@ class TheMainClass(object):
       self.router = router_class()
     self.router.default = _default_request_handler
 
+  def add_param(self, **kv):
+    self.extra_args.update(**kv)
+
   def hook(self, h_type, *a, **kw):
-    if h_type not in POSSIBLE_HOOKS:
-      raise Exception("Invalid hook type! {0:s} not in {1:s}".format(h_type, str(POSSIBLE_HOOKS)))
+    if h_type not in AVAILABLE_HOOKS:
+      raise Exception("Invalid hook type! {0:s} not in {1:s}".format(h_type, str(AVAILABLE_HOOKS)))
 
     def _wrapper(f):
       entry = dict(func=f, args=a, kwargs=kw)
@@ -1188,6 +1198,9 @@ class TheMainClass(object):
     the_logger.debug('WSGI handler called ...')
     exc_info = None
     ctx = TheContext(environ)
+    for k,v in self.extra_args.items():
+      print("SetAttr",k,v)
+      setattr(ctx, k, v);
     try:
       # one will say that is insane, but it handle the situation that
       # exception handler will fail somehow ....
@@ -1226,6 +1239,7 @@ main_scope = TheMainClass()
 # expose in globals, so we can use @decorator
 route = main_scope.route
 hook = main_scope.hook
+add_param = main_scope.add_param
 add_route = main_scope.add_route
 handle_exception = main_scope.handle_exception
 
